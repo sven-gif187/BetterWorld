@@ -1,0 +1,30 @@
+# ╔══════════════════════════════════════════════╗
+# ║   .gitignore – Diese Dateien bleiben LOKAL  ║
+# ╚══════════════════════════════════════════════╝
+
+# 🔐 GEHEIME KONFIGURATION – niemals hochladen!
+.env
+
+# 📊 Trade-Daten (persönlich, nicht für GitHub)
+trades_log_3coins.json
+trades_log_3coins.tmp
+trades_log_3coins_backup.json
+paper_balance.json
+
+# 🐍 Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# 💻 OS & IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

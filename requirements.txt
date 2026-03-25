@@ -1,0 +1,9 @@
+customtkinter>=5.2.0
+ccxt>=4.0.0
+pandas>=2.0.0
+pandas_ta>=0.3.14b
+matplotlib>=3.7.0
+mplfinance>=0.12.9
+numpy>=1.24.0
+python-dotenv>=1.0.0
+requests>=2.31.0
