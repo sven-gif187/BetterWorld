@@ -86,6 +86,24 @@ python sven_imperium_paper.py
 
 ---
 
+## 🧰 Weitere Tools in diesem Repo
+
+### 🎙️ [voice2text](voice2text/) – Video & Sprache zu Text
+
+Video oder Online-Link rein, lesbarer Text raus. Mit Uhrzeit im Link wird **nur die
+gewünschte Stelle** geladen statt des ganzen Videos.
+
+```bash
+pip install -r voice2text/requirements.txt
+python -m voice2text                       # Oberfläche
+python -m voice2text video.mp4 --start 12:30 --dauer 90
+```
+
+Läuft komplett offline (faster-whisper), speichert als `.txt` · `.srt` · `.vtt` · `.md`
+und kann Texte auch wieder vorlesen. → [Anleitung](voice2text/README.md)
+
+---
+
 ## 🤝 Mitmachen
 
 Beiträge sind herzlich willkommen!

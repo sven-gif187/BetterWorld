@@ -1,0 +1,21 @@
+# ╔══════════════════════════════════════════════╗
+# ║   voice2text – Abhängigkeiten                ║
+# ╚══════════════════════════════════════════════╝
+#
+# Installation:  pip install -r voice2text/requirements.txt
+
+# ── Pflicht ───────────────────────────────────────────────────
+customtkinter>=5.2.0        # die Oberfläche
+faster-whisper>=1.0.0       # Spracherkennung, offline & kostenlos
+imageio-ffmpeg>=0.4.9       # bringt ffmpeg mit – erspart die Handinstallation
+
+# ── Für Online-Links (YouTube & Co.) ──────────────────────────
+yt-dlp>=2024.1.0
+
+# ── Für die Sprachausgabe (Text → Sprache) ────────────────────
+pyttsx3>=2.90               # offline, Stimmen des Betriebssystems
+
+# ── Optional ──────────────────────────────────────────────────
+# openai>=1.12.0            # Cloud-Erkennung statt lokal (braucht OPENAI_API_KEY)
+# gTTS>=2.5.0               # natürlicher klingende MP3-Sprachausgabe (online)
+# openai-whisper>=20231117  # das Original-Whisper als Alternative
