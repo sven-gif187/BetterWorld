@@ -15,6 +15,10 @@ yt-dlp>=2024.1.0
 # ── Für die Sprachausgabe (Text → Sprache) ────────────────────
 pyttsx3>=2.90               # offline, Stimmen des Betriebssystems
 
+# ── Komfort ───────────────────────────────────────────────────
+tkinterdnd2>=0.3.0          # Dateien ins Fenster ziehen (ohne das Paket
+                            #   bleibt der Dateidialog, sonst ändert sich nichts)
+
 # ── Optional ──────────────────────────────────────────────────
 # openai>=1.12.0            # Cloud-Erkennung statt lokal (braucht OPENAI_API_KEY)
 # gTTS>=2.5.0               # natürlicher klingende MP3-Sprachausgabe (online)

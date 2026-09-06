@@ -3,12 +3,13 @@
 ║  🎙️  VOICE2TEXT – Oberfläche                                 ║
 ╚══════════════════════════════════════════════════════════════╝
 
-Video rein → Text raus. Fünf Reiter:
+Video rein → Text raus. Sechs Reiter:
 
-  🎬 Datei        Video oder Audio vom Rechner transkribieren
-  🌐 Online-Link  Link einwerfen, optional Uhrzeit – nur die Stelle wird geholt
-  📝 Transkript   Ergebnis lesen, kopieren, als TXT/SRT/VTT/MD speichern
-  🔊 Vorlesen     Text zu Sprache – auch das fertige Transkript
+  🎬 Datei         Video oder Audio vom Rechner – auch per Drag & Drop
+  🌐 Online-Link   Link einwerfen, optional Uhrzeit – nur die Stelle wird geholt
+  📚 Warteschlange Mehrere Videos am Stück, einer nach dem anderen
+  📝 Transkript    Ergebnis lesen, kopieren, als TXT/SRT/VTT/MD speichern
+  🔊 Vorlesen      Text zu Sprache – auch das fertige Transkript
   ⚙️ Einstellungen Modell, Sprache, Backend, Ausgabeordner
 
 Start:  python -m voice2text
@@ -22,7 +23,6 @@ import queue
 import subprocess
 import sys
 import threading
-import traceback
 from pathlib import Path
 
 try:
@@ -37,9 +37,28 @@ except ImportError as exc:  # pragma: no cover – nur ohne GUI-Pakete
     )
 
 from . import media, tts
-from .pipeline import Job, run_job, safe_filename, save_all_formats
+from .pipeline import Job, safe_filename, save_all_formats
 from .timecode import format_hms
 from .transcribe import LANGUAGES, MODELS, Transcript, available_backends, backend_status
+from .warteschlange import FEHLER, FERTIG, LAEUFT, WARTET, Auftrag, Warteschlange
+
+# ── DRAG & DROP (optional) ────────────────────────────────────
+# Ohne tkinterdnd2 läuft alles wie gehabt, nur eben ohne Ziehen.
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    DND_DA = True
+except Exception:
+    DND_DA = False
+
+if DND_DA:
+    class _Fenster(ctk.CTk, TkinterDnD.DnDWrapper):
+        """customtkinter-Fenster, das zusätzlich Dateien per Maus annimmt."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.TkdndVersion = TkinterDnD._require(self)
+else:                                       # pragma: no cover
+    _Fenster = ctk.CTk
 
 # ── FARBEN (gleiche Handschrift wie der Trading-Bot) ──────────
 CLR_BG     = "#0a0a0b"
@@ -49,6 +68,9 @@ CLR_GREEN  = "#00ff88"
 CLR_RED    = "#ff4655"
 CLR_BLUE   = "#4fa3e0"
 CLR_GREY   = "#8a8a92"
+
+STATUS_FARBE = {WARTET: CLR_GREY, LAEUFT: CLR_ACCENT, FERTIG: CLR_GREEN, FEHLER: CLR_RED}
+STATUS_ZEICHEN = {WARTET: "⏳", LAEUFT: "▶️", FERTIG: "✅", FEHLER: "❌"}
 
 SETTINGS_FILE = Path.home() / ".voice2text.json"
 DEFAULT_OUTPUT = Path.home() / "Transkripte"
@@ -103,17 +125,17 @@ def open_folder(path: str | Path) -> None:
 # ══════════════════════════════════════════════════════════════
 # DIE APP
 # ══════════════════════════════════════════════════════════════
-class VoiceApp(ctk.CTk):
+class VoiceApp(_Fenster):
     def __init__(self):
         super().__init__()
         self.settings = load_settings()
         self.transcript: Transcript | None = None
-        self.busy = False
         self.messages: queue.Queue = queue.Queue()
+        self.schlange = Warteschlange(ereignis=self._schlangen_ereignis)
 
         self.title("🎙️ Voice2Text – Video & Sprache zu Text")
-        self.geometry("1060x780")
-        self.minsize(900, 640)
+        self.geometry("1060x820")
+        self.minsize(900, 660)
         self.configure(fg_color=CLR_BG)
         ctk.set_appearance_mode("dark")
 
@@ -123,7 +145,11 @@ class VoiceApp(ctk.CTk):
 
         self.after(120, self._pump)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+
         self._log("👋 Willkommen! Video oder Link auswählen und loslegen.")
+        if DND_DA:
+            self._log("🖱️ Tipp: Videos lassen sich direkt ins Fenster ziehen.")
+            self._drop_ziel(self, self._drop_irgendwo)
         self._check_environment()
 
     # ── KOPFZEILE ─────────────────────────────────────────────
@@ -157,12 +183,14 @@ class VoiceApp(ctk.CTk):
 
         self.tab_file = self.tabs.add("🎬 Datei")
         self.tab_link = self.tabs.add("🌐 Online-Link")
+        self.tab_queue = self.tabs.add("📚 Warteschlange")
         self.tab_text = self.tabs.add("📝 Transkript")
         self.tab_tts = self.tabs.add("🔊 Vorlesen")
         self.tab_cfg = self.tabs.add("⚙️ Einstellungen")
 
         self._build_tab_file()
         self._build_tab_link()
+        self._build_tab_queue()
         self._build_tab_text()
         self._build_tab_tts()
         self._build_tab_settings()
@@ -174,31 +202,41 @@ class VoiceApp(ctk.CTk):
             frame, text="Video oder Audio vom Rechner transkribieren",
             font=ctk.CTkFont(size=16, weight="bold"),
         ).pack(anchor="w", padx=18, pady=(16, 2))
-        ctk.CTkLabel(
-            frame,
-            text="Unterstützt mp4, mkv, mov, webm, mp3, m4a, wav … – alles, was ffmpeg lesen kann.",
-            text_color=CLR_GREY,
-        ).pack(anchor="w", padx=18, pady=(0, 14))
+
+        hinweis = "Unterstützt mp4, mkv, mov, webm, mp3, m4a, wav … – alles, was ffmpeg lesen kann."
+        if DND_DA:
+            hinweis += "\n🖱️ Datei einfach ins Fenster ziehen – mehrere landen in der Warteschlange."
+        ctk.CTkLabel(frame, text=hinweis, text_color=CLR_GREY, justify="left").pack(
+            anchor="w", padx=18, pady=(0, 14))
 
         row = ctk.CTkFrame(frame, fg_color="transparent")
         row.pack(fill="x", padx=18)
         self.file_var = StringVar()
-        ctk.CTkEntry(
+        self.file_entry = ctk.CTkEntry(
             row, textvariable=self.file_var, height=40,
             placeholder_text="Pfad zur Datei – oder rechts auf „Durchsuchen“ klicken",
-        ).pack(side="left", fill="x", expand=True)
+        )
+        self.file_entry.pack(side="left", fill="x", expand=True)
+        self._drop_ziel(self.file_entry, self._drop_auf_dateifeld)
+
         ctk.CTkButton(
             row, text="📂 Durchsuchen", width=140, height=40, command=self._choose_file,
         ).pack(side="left", padx=(10, 0))
 
         self.file_start, self.file_end, self.file_dur = self._build_range_row(frame)
 
+        knoepfe = ctk.CTkFrame(frame, fg_color="transparent")
+        knoepfe.pack(fill="x", padx=18, pady=(22, 10))
         ctk.CTkButton(
-            frame, text="▶️  TRANSKRIPTION STARTEN", height=48,
+            knoepfe, text="▶️  TRANSKRIPTION STARTEN", height=48,
             font=ctk.CTkFont(size=15, weight="bold"),
             fg_color=CLR_GREEN, hover_color="#00cc6d", text_color="#04120a",
             command=self._start_file_job,
-        ).pack(fill="x", padx=18, pady=(22, 10))
+        ).pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(
+            knoepfe, text="➕ In die Warteschlange", height=48, width=200,
+            command=lambda: self._start_file_job(sofort=False),
+        ).pack(side="left", padx=(10, 0))
 
     # ---------- 🌐 LINK ----------
     def _build_tab_link(self):
@@ -229,12 +267,18 @@ class VoiceApp(ctk.CTk):
             text_color=CLR_GREY, font=ctk.CTkFont(size=11), wraplength=900, justify="left",
         ).pack(anchor="w", padx=18, pady=(14, 0))
 
+        knoepfe = ctk.CTkFrame(frame, fg_color="transparent")
+        knoepfe.pack(fill="x", padx=18, pady=(16, 10))
         ctk.CTkButton(
-            frame, text="▶️  LINK TRANSKRIBIEREN", height=48,
+            knoepfe, text="▶️  LINK TRANSKRIBIEREN", height=48,
             font=ctk.CTkFont(size=15, weight="bold"),
             fg_color=CLR_BLUE, hover_color="#3d87bd",
             command=self._start_link_job,
-        ).pack(fill="x", padx=18, pady=(16, 10))
+        ).pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(
+            knoepfe, text="➕ In die Warteschlange", height=48, width=200,
+            command=lambda: self._start_link_job(sofort=False),
+        ).pack(side="left", padx=(10, 0))
 
     def _build_range_row(self, parent):
         """Drei Felder für Start / Ende / Dauer – identisch in beiden Reitern."""
@@ -259,6 +303,41 @@ class VoiceApp(ctk.CTk):
             ctk.CTkEntry(cell, textvariable=var, height=36, placeholder_text=hint).pack(fill="x")
 
         return start_var, end_var, dur_var
+
+    # ---------- 📚 WARTESCHLANGE ----------
+    def _build_tab_queue(self):
+        frame = self.tab_queue
+        ctk.CTkLabel(
+            frame, text="Mehrere Videos am Stück",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).pack(anchor="w", padx=18, pady=(16, 2))
+
+        hinweis = ("Einträge werden nacheinander abgearbeitet – parallel wäre nicht schneller,\n"
+                   "beide würden sich denselben Prozessor teilen.")
+        if DND_DA:
+            hinweis += "\n🖱️ Mehrere Dateien gleichzeitig ins Fenster ziehen füllt die Liste auf einmal."
+        ctk.CTkLabel(frame, text=hinweis, text_color=CLR_GREY, justify="left").pack(
+            anchor="w", padx=18, pady=(0, 12))
+
+        leiste = ctk.CTkFrame(frame, fg_color="transparent")
+        leiste.pack(fill="x", padx=18, pady=(0, 10))
+        ctk.CTkButton(
+            leiste, text="▶️ Alle abarbeiten", fg_color=CLR_GREEN, text_color="#04120a",
+            hover_color="#00cc6d", command=self._queue_start,
+        ).pack(side="left")
+        ctk.CTkButton(leiste, text="🛑 Abbrechen", fg_color=CLR_RED, hover_color="#cc3644",
+                      command=self._queue_abbrechen).pack(side="left", padx=8)
+        ctk.CTkButton(leiste, text="🧹 Erledigte entfernen",
+                      command=self._queue_aufraeumen).pack(side="left")
+        ctk.CTkButton(leiste, text="📁 Ausgabeordner",
+                      command=lambda: open_folder(self.output_var.get())).pack(side="right")
+
+        self.queue_info = ctk.CTkLabel(frame, text="Warteschlange ist leer.", text_color=CLR_GREY)
+        self.queue_info.pack(anchor="w", padx=18)
+
+        self.queue_list = ctk.CTkScrollableFrame(frame, fg_color=CLR_BG)
+        self.queue_list.pack(fill="both", expand=True, padx=18, pady=(8, 14))
+        self._drop_ziel(self.queue_list, self._drop_in_warteschlange)
 
     # ---------- 📝 TRANSKRIPT ----------
     def _build_tab_text(self):
@@ -415,17 +494,81 @@ class VoiceApp(ctk.CTk):
         self.progress.set(0)
         self.progress.pack(fill="x", padx=14, pady=(0, 8))
 
-        self.log_box = ctk.CTkTextbox(foot, height=130, fg_color=CLR_BG,
+        self.log_box = ctk.CTkTextbox(foot, height=120, fg_color=CLR_BG,
                                       font=ctk.CTkFont(size=12, family="monospace"))
         self.log_box.pack(fill="both", expand=True, padx=14, pady=(0, 12))
+
+    # ══════════════════════════════════════════════════════════
+    # DRAG & DROP
+    # ══════════════════════════════════════════════════════════
+    def _drop_ziel(self, widget, handler) -> None:
+        """Macht ein Bedienelement zum Ablageziel – falls tkinterdnd2 da ist."""
+        if not DND_DA:
+            return
+        try:
+            widget.drop_target_register(DND_FILES)
+            widget.dnd_bind("<<Drop>>", handler)
+        except Exception:
+            pass                               # nicht schlimm, dann eben ohne
+
+    def _pfade_aus_drop(self, event) -> list[str]:
+        """
+        Zerlegt die abgelegten Pfade.
+
+        Tk liefert sie als eine Zeichenkette; Pfade mit Leerzeichen stehen
+        dabei in geschweiften Klammern. splitlist() kennt diese Regel.
+        """
+        try:
+            roh = self.tk.splitlist(event.data)
+        except Exception:
+            roh = str(getattr(event, "data", "")).split()
+        pfade = []
+        for eintrag in roh:
+            pfad = str(eintrag).strip().strip("{}")
+            if pfad and Path(pfad).exists():
+                pfade.append(pfad)
+        return pfade
+
+    def _drop_auf_dateifeld(self, event):
+        pfade = self._pfade_aus_drop(event)
+        if not pfade:
+            return
+        self.file_var.set(pfade[0])
+        self._log(f"🖱️ Übernommen: {Path(pfade[0]).name}")
+        if len(pfade) > 1:
+            self._in_warteschlange(pfade[1:])
+
+    def _drop_in_warteschlange(self, event):
+        self._in_warteschlange(self._pfade_aus_drop(event))
+
+    def _drop_irgendwo(self, event):
+        """Ablegen außerhalb der Felder: eine Datei ins Feld, mehrere in die Liste."""
+        pfade = self._pfade_aus_drop(event)
+        if not pfade:
+            return
+        if len(pfade) == 1:
+            self.file_var.set(pfade[0])
+            self.tabs.set("🎬 Datei")
+            self._log(f"🖱️ Übernommen: {Path(pfade[0]).name}")
+        else:
+            self._in_warteschlange(pfade)
+
+    def _in_warteschlange(self, pfade: list[str]) -> None:
+        for pfad in pfade:
+            self.schlange.hinzufuegen(self._job_bauen(pfad, "", "", ""))
+        self._log(f"➕ {len(pfade)} Einträge in die Warteschlange gelegt.")
+        self.tabs.set("📚 Warteschlange")
 
     # ══════════════════════════════════════════════════════════
     # AKTIONEN
     # ══════════════════════════════════════════════════════════
     def _choose_file(self):
-        path = filedialog.askopenfilename(title="Video oder Audio auswählen", filetypes=FILETYPES)
-        if path:
-            self.file_var.set(path)
+        pfade = filedialog.askopenfilenames(title="Video oder Audio auswählen", filetypes=FILETYPES)
+        if not pfade:
+            return
+        self.file_var.set(pfade[0])
+        if len(pfade) > 1:
+            self._in_warteschlange(list(pfade[1:]))
 
     def _choose_output_dir(self):
         path = filedialog.askdirectory(title="Ausgabeordner wählen")
@@ -454,126 +597,234 @@ class VoiceApp(ctk.CTk):
         lines = [media.ffmpeg_status(), backend_status(), tts.tts_status()]
         try:
             import yt_dlp  # noqa: F401
+            yt_dlp_da = True
             lines.append("✅ Online-Links: yt-dlp bereit")
         except ImportError:
+            yt_dlp_da = False
             lines.append("⚠️ Online-Links brauchen yt-dlp (pip install yt-dlp)")
+        lines.append("✅ Drag & Drop: aktiv" if DND_DA
+                     else "⚠️ Drag & Drop braucht tkinterdnd2 (pip install tkinterdnd2)")
 
-        short = " · ".join(line.split(":")[0] for line in lines)
-        self.env_label.configure(text=short)
+        # Oben rechts ist wenig Platz – dort nur Häkchen, die Sätze stehen
+        # ausführlich im Reiter "Einstellungen".
+        def marke(name: str, da: bool) -> str:
+            return f"{name} {'✅' if da else '❌'}"
+
+        kurz = " · ".join((
+            marke("ffmpeg", bool(media.find_ffmpeg())),
+            marke("Whisper", bool(available_backends())),
+            marke("Stimme", bool(tts.available_engines())),
+            marke("Links", yt_dlp_da),
+            marke("Ziehen", DND_DA),
+        ))
+        self.env_label.configure(text=kurz)
         if hasattr(self, "status_text"):
             self.status_text.configure(text="\n".join(lines))
         for line in lines:
             if line.startswith(("❌", "⚠️")):
                 self._log(line)
 
-    # ── AUFTRÄGE STARTEN ──────────────────────────────────────
-    def _start_file_job(self):
-        source = self.file_var.get().strip()
-        if not source:
-            messagebox.showinfo("Keine Datei", "Bitte zuerst eine Video- oder Audiodatei auswählen.")
-            return
-        self._start_job(source, self.file_start.get(), self.file_end.get(), self.file_dur.get())
-
-    def _start_link_job(self):
-        source = self.url_var.get().strip()
-        if not source:
-            messagebox.showinfo("Kein Link", "Bitte zuerst einen Link einfügen.")
-            return
-        if not media.looks_like_url(source):
-            messagebox.showwarning("Link prüfen", "Das sieht nicht nach einem Link aus – er sollte mit http:// oder https:// beginnen.")
-            return
-        self._start_job(source, self.url_start.get(), self.url_end.get(), self.url_dur.get())
-
-    def _start_job(self, source: str, start: str, end: str, duration: str):
-        if self.busy:
-            messagebox.showinfo("Läuft schon", "Es läuft bereits eine Transkription. Bitte kurz warten.")
-            return
-
+    # ── AUFTRÄGE ──────────────────────────────────────────────
+    def _job_bauen(self, quelle: str, start: str, ende: str, dauer: str) -> Job:
         self.settings = self._current_settings()
         save_settings(self.settings)
-
-        job = Job(
-            source=source,
+        return Job(
+            source=quelle,
             start=start or None,
-            end=end or None,
-            duration=duration or None,
+            end=ende or None,
+            duration=dauer or None,
             backend=self.backend_menu.get(),
             model=self.model_menu.get(),
             language=LANGUAGES.get(self.language_menu.get()),
             cookies_from_browser=self.cookies_var.get() or None,
         )
 
-        self.busy = True
-        self.progress.set(0)
-        self._set_status("Läuft …")
-        self._log("─" * 60)
-        self._log(f"▶️ Start: {source}")
-        threading.Thread(target=self._worker, args=(job,), daemon=True).start()
+    def _start_file_job(self, sofort: bool = True):
+        quelle = self.file_var.get().strip()
+        if not quelle:
+            messagebox.showinfo("Keine Datei", "Bitte zuerst eine Video- oder Audiodatei auswählen.")
+            return
+        self._auftrag_annehmen(quelle, self.file_start.get(), self.file_end.get(),
+                               self.file_dur.get(), sofort)
 
-    def _worker(self, job: Job):
-        """Läuft im Hintergrund – meldet sich nur über die Queue."""
-        def report(share, message):
-            if message:
-                self.messages.put(("log", message))
-            self.messages.put(("progress", share))
+    def _start_link_job(self, sofort: bool = True):
+        quelle = self.url_var.get().strip()
+        if not quelle:
+            messagebox.showinfo("Kein Link", "Bitte zuerst einen Link einfügen.")
+            return
+        if not media.looks_like_url(quelle):
+            messagebox.showwarning(
+                "Link prüfen",
+                "Das sieht nicht nach einem Link aus – er sollte mit http:// oder https:// beginnen.")
+            return
+        self._auftrag_annehmen(quelle, self.url_start.get(), self.url_end.get(),
+                               self.url_dur.get(), sofort)
 
+    def _auftrag_annehmen(self, quelle: str, start: str, ende: str, dauer: str, sofort: bool):
         try:
-            transcript = run_job(job, progress=report)
-            self.messages.put(("done", transcript))
-        except Exception as exc:
-            detail = str(exc) or exc.__class__.__name__
-            self.messages.put(("error", detail))
-            self.messages.put(("log", "🐞 " + traceback.format_exc(limit=2).strip().splitlines()[-1]))
+            job = self._job_bauen(quelle, start, ende, dauer)
+        except ValueError as exc:
+            messagebox.showwarning("Zeitangabe prüfen", str(exc))
+            return
+
+        auftrag = self.schlange.hinzufuegen(job)
+        if not sofort:
+            self._log(f"➕ [{auftrag.nummer}] in die Warteschlange gelegt.")
+            self.tabs.set("📚 Warteschlange")
+            return
+
+        if self.schlange.laeuft:
+            self._log(f"➕ [{auftrag.nummer}] angehängt – kommt nach dem laufenden Eintrag dran.")
+            self.tabs.set("📚 Warteschlange")
+            return
+
+        self.progress.set(0)
+        self._log("─" * 60)
+        self.schlange.starten()
+
+    def _queue_start(self):
+        if self.schlange.laeuft:
+            self._log("▶️ Läuft bereits.")
+            return
+        if not self.schlange.starten():
+            messagebox.showinfo("Nichts zu tun", "In der Warteschlange wartet gerade kein Eintrag.")
+
+    def _queue_abbrechen(self):
+        if not self.schlange.laeuft:
+            self._log("Es läuft gerade nichts.")
+            return
+        self.schlange.abbrechen()
+
+    def _queue_aufraeumen(self):
+        entfernt = self.schlange.erledigte_entfernen()
+        self._log(f"🧹 {entfernt} erledigte Einträge entfernt." if entfernt
+                  else "🧹 Nichts zu entfernen.")
+
+    # ── BRÜCKE VOM HINTERGRUND IN DIE OBERFLÄCHE ──────────────
+    def _schlangen_ereignis(self, art: str, wert) -> None:
+        """Läuft im Arbeits-Thread – deshalb nur in die Queue legen, nichts zeichnen."""
+        self.messages.put((art, wert))
 
     def _pump(self):
         """Holt Nachrichten aus dem Hintergrund in die Oberfläche."""
+        neu_zeichnen = False
         try:
             while True:
-                kind, payload = self.messages.get_nowait()
-                if kind == "log":
-                    self._log(payload)
-                    self._set_status(str(payload)[:110])
-                elif kind == "progress":
-                    if payload is None:
-                        self.progress.configure(mode="indeterminate")
-                        self.progress.start()
-                    else:
-                        self.progress.stop()
-                        self.progress.configure(mode="determinate")
-                        self.progress.set(max(0.0, min(1.0, float(payload))))
-                elif kind == "done":
-                    self._on_job_done(payload)
-                elif kind == "error":
-                    self._on_job_failed(payload)
+                art, wert = self.messages.get_nowait()
+                if art == "log":
+                    self._log(str(wert))
+                    self._set_status(str(wert)[:110])
+                elif art == "fortschritt":
+                    self._set_progress(wert)
+                elif art == "aenderung":
+                    neu_zeichnen = True
+                elif art == "fertig":
+                    self._auftrag_fertig(wert)
+                    neu_zeichnen = True
+                elif art == "fehler":
+                    self._auftrag_gescheitert(wert)
+                    neu_zeichnen = True
+                elif art == "leer":
+                    self._schlange_fertig()
+                    neu_zeichnen = True
+                elif art == "hinweis":
+                    messagebox.showerror("Das hat nicht geklappt", str(wert))
         except queue.Empty:
             pass
+        if neu_zeichnen:
+            self._render_queue()
         self.after(120, self._pump)
 
-    def _on_job_done(self, transcript: Transcript):
-        self.busy = False
-        self.progress.stop()
-        self.progress.configure(mode="determinate")
-        self.progress.set(1.0)
-        self.transcript = transcript
-        self._render_transcript()
-        self.tabs.set("📝 Transkript")
-        self._set_status("✅ Transkription fertig.")
+    def _set_progress(self, anteil):
+        if anteil is None:
+            self.progress.configure(mode="indeterminate")
+            self.progress.start()
+        else:
+            self.progress.stop()
+            self.progress.configure(mode="determinate")
+            self.progress.set(max(0.0, min(1.0, float(anteil))))
 
-        if self.autosave_var.get():
+    def _auftrag_fertig(self, auftrag: Auftrag):
+        self.transcript = auftrag.transcript
+        self._render_transcript()
+        if self.schlange.offen == 0:
+            self.tabs.set("📝 Transkript")
+
+        if self.autosave_var.get() and auftrag.transcript:
             try:
-                written = save_all_formats(transcript, self.output_var.get())
-                self._log(f"💾 Gespeichert in {Path(written[0]).parent}")
+                geschrieben = save_all_formats(auftrag.transcript, self.output_var.get())
+                self._log(f"💾 Gespeichert in {Path(geschrieben[0]).parent}")
             except Exception as exc:
                 self._log(f"⚠️ Automatisches Speichern nicht möglich: {exc}")
 
-    def _on_job_failed(self, message: str):
-        self.busy = False
-        self.progress.stop()
-        self.progress.configure(mode="determinate")
-        self.progress.set(0)
-        self._set_status("❌ Abgebrochen.")
-        self._log(f"❌ {message}")
-        messagebox.showerror("Das hat nicht geklappt", message)
+    def _auftrag_gescheitert(self, auftrag: Auftrag):
+        self._log(f"❌ [{auftrag.nummer}] {auftrag.name}: {auftrag.fehler}")
+        # Bei einem einzelnen Eintrag darf ruhig ein Fenster aufgehen; bei
+        # zwanzig Einträgen wäre das eine Klickorgie – dann reicht die Liste.
+        if len(self.schlange.auftraege) == 1:
+            messagebox.showerror("Das hat nicht geklappt", auftrag.fehler)
+
+    def _schlange_fertig(self):
+        self._set_progress(0.0 if self.schlange.offen else 1.0)
+        self._set_status("✅ " + self.schlange.zusammenfassung())
+        self._log("✅ " + self.schlange.zusammenfassung())
+
+    # ── WARTESCHLANGE ANZEIGEN ────────────────────────────────
+    def _render_queue(self):
+        for kind in self.queue_list.winfo_children():
+            kind.destroy()
+
+        auftraege = self.schlange.auftraege
+        self.queue_info.configure(text=self.schlange.zusammenfassung())
+        if not auftraege:
+            ctk.CTkLabel(
+                self.queue_list,
+                text="Noch nichts da.\n\nDateien hierher ziehen oder in den Reitern oben\n"
+                     "auf „➕ In die Warteschlange“ klicken.",
+                text_color=CLR_GREY, justify="left",
+            ).pack(anchor="w", padx=16, pady=16)
+            return
+
+        for auftrag in auftraege:
+            zeile = ctk.CTkFrame(self.queue_list, fg_color=CLR_CARD, corner_radius=8)
+            zeile.pack(fill="x", padx=6, pady=4)
+
+            ctk.CTkLabel(
+                zeile, text=f"{STATUS_ZEICHEN.get(auftrag.status, '•')} {auftrag.nummer}",
+                width=50, text_color=STATUS_FARBE.get(auftrag.status, CLR_GREY),
+                font=ctk.CTkFont(size=13, weight="bold"),
+            ).pack(side="left", padx=(12, 6), pady=10)
+
+            text = auftrag.name
+            if auftrag.status == FEHLER and auftrag.fehler:
+                text += f"   —   {auftrag.fehler.splitlines()[0][:70]}"
+            elif auftrag.status == FERTIG and auftrag.transcript:
+                text += f"   —   {len(auftrag.transcript.text.split())} Wörter"
+            ctk.CTkLabel(
+                zeile, text=text, anchor="w",
+                text_color="#ffffff" if not auftrag.erledigt else CLR_GREY,
+            ).pack(side="left", fill="x", expand=True)
+
+            # Erst der Papierkorb, dann das Auge: was zuerst nach rechts
+            # gepackt wird, sitzt außen – so stehen die Papierkörbe in allen
+            # Zeilen untereinander, auch wenn das Auge mal fehlt.
+            if auftrag.status != LAEUFT:
+                ctk.CTkButton(zeile, text="🗑", width=40, fg_color=CLR_CARD,
+                              hover_color=CLR_RED,
+                              command=lambda a=auftrag: self._entferne_auftrag(a)).pack(side="right", padx=(0, 10))
+            if auftrag.status == FERTIG:
+                ctk.CTkButton(zeile, text="👁", width=40,
+                              command=lambda a=auftrag: self._zeige_auftrag(a)).pack(side="right", padx=(0, 4))
+
+    def _zeige_auftrag(self, auftrag: Auftrag):
+        if auftrag.transcript:
+            self.transcript = auftrag.transcript
+            self._render_transcript()
+            self.tabs.set("📝 Transkript")
+
+    def _entferne_auftrag(self, auftrag: Auftrag):
+        if self.schlange.entfernen(auftrag):
+            self._render_queue()
 
     # ── TRANSKRIPT ────────────────────────────────────────────
     def _render_transcript(self):
@@ -633,8 +884,8 @@ class VoiceApp(ctk.CTk):
         if not self._require_transcript():
             return
         try:
-            written = save_all_formats(self.transcript, self.output_var.get())
-            self._log("💾 " + " · ".join(p.name for p in written))
+            geschrieben = save_all_formats(self.transcript, self.output_var.get())
+            self._log("💾 " + " · ".join(p.name for p in geschrieben))
             open_folder(self.output_var.get())
         except Exception as exc:
             messagebox.showerror("Speichern fehlgeschlagen", str(exc))
@@ -678,12 +929,15 @@ class VoiceApp(ctk.CTk):
             messagebox.showinfo("Kein Text", "Bitte zuerst etwas eintippen oder das Transkript übernehmen.")
             return
 
+        stimme = self._selected_voice_id()
+        tempo = int(self.rate_slider.get())
+
         def work():
             try:
-                tts.speak(text, voice=self._selected_voice_id(), rate=int(self.rate_slider.get()))
+                tts.speak(text, voice=stimme, rate=tempo)
                 self.messages.put(("log", "🔊 Vorlesen beendet."))
             except Exception as exc:
-                self.messages.put(("error", str(exc)))
+                self.messages.put(("hinweis", str(exc)))
 
         self._log("🔊 Vorlesen …")
         threading.Thread(target=work, daemon=True).start()
@@ -703,12 +957,15 @@ class VoiceApp(ctk.CTk):
         if not path:
             return
 
+        stimme = self._selected_voice_id()
+        tempo = int(self.rate_slider.get())
+
         def work():
             try:
-                tts.save_speech(text, path, voice=self._selected_voice_id(), rate=int(self.rate_slider.get()))
+                tts.save_speech(text, path, voice=stimme, rate=tempo)
                 self.messages.put(("log", f"💾 Audiodatei gespeichert: {path}"))
             except Exception as exc:
-                self.messages.put(("error", str(exc)))
+                self.messages.put(("hinweis", str(exc)))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -725,6 +982,14 @@ class VoiceApp(ctk.CTk):
             save_settings(self._current_settings())
         except Exception:
             pass
+        if self.schlange.laeuft:
+            if not messagebox.askokcancel(
+                "Noch am Arbeiten",
+                "Es läuft noch eine Transkription. Wirklich beenden?\n"
+                "Der laufende Eintrag geht dabei verloren.",
+            ):
+                return
+            self.schlange.abbrechen()
         self.destroy()
 
 

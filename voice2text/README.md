@@ -19,6 +19,8 @@
 | 🔗 **Sprungmarke** | Enthält der Link schon `?t=90`, wird der Startpunkt automatisch übernommen |
 | 📍 **Echte Zeitstempel** | Ab Minute 12:30 transkribiert? Die Zeiten passen trotzdem zum Original |
 | 💾 **4 Formate** | `.txt` · `.srt` (Untertitel) · `.vtt` (Web) · `.md` (Archiv) |
+| 🖱️ **Drag & Drop** | Videos einfach ins Fenster ziehen – mehrere landen in der Warteschlange |
+| 📚 **Warteschlange** | Mehrere Videos am Stück, einer nach dem anderen, Fehler stoppen den Rest nicht |
 | 🔊 **Text → Sprache** | Transkript oder eigenen Text vorlesen lassen und als Audio speichern |
 | 🔐 **Offline möglich** | Mit `faster-whisper` verlässt kein Ton den Rechner – kein Konto, keine Gebühr |
 | 💻 **Zwei Wege** | Fenster-Oberfläche **oder** Kommandozeile |
@@ -98,15 +100,26 @@ python -m voice2text
 
 **Windows:** `voice2text\START_WINDOWS.bat` doppelklicken.
 
-Fünf Reiter:
+Sechs Reiter:
 
 | Reiter | Wofür |
 |---|---|
-| 🎬 **Datei** | Video/Audio vom Rechner auswählen, optional Ausschnitt setzen, starten |
+| 🎬 **Datei** | Video/Audio auswählen oder hineinziehen, optional Ausschnitt setzen, starten |
 | 🌐 **Online-Link** | Link einfügen, optional Start/Ende, starten |
+| 📚 **Warteschlange** | Mehrere Videos am Stück – Fortschritt, Fehler, fertige Transkripte auf einen Blick |
 | 📝 **Transkript** | Ergebnis lesen, kopieren, speichern, vorlesen lassen |
 | 🔊 **Vorlesen** | Beliebigen Text zu Sprache – Stimme und Tempo einstellbar |
 | ⚙️ **Einstellungen** | Modell, Sprache, Backend, Ausgabeordner, Systemstatus |
+
+### Mehrere Videos auf einmal
+
+Dateien ins Fenster ziehen (mehrere gleichzeitig), oder in den Reitern
+„🎬 Datei" / „🌐 Online-Link" auf **➕ In die Warteschlange** klicken statt auf Start.
+Dann einmal **▶️ Alle abarbeiten** – der Rest läuft von allein.
+
+Ein Eintrag mit Fehler hält die anderen nicht auf; er wird rot markiert und die Liste
+läuft weiter. **🛑 Abbrechen** stoppt nach dem gerade laufenden Eintrag, damit keine
+halben Dateien zurückbleiben.
 
 Fertige Transkripte landen automatisch in `~/Transkripte` (im Reiter *Einstellungen* änderbar).
 
@@ -132,6 +145,9 @@ python -m voice2text video.mp4 --ausgabe untertitel.srt
 
 # alle vier Formate in einen Ordner
 python -m voice2text video.mp4 --ordner ~/Transkripte
+
+# gleich mehrere Videos hintereinander
+python -m voice2text video1.mp4 video2.mp4 video3.mp4 --ordner ~/Transkripte
 
 # Text vorlesen lassen
 python -m voice2text --sprich "Hallo Sven, das Transkript ist fertig."
@@ -192,6 +208,7 @@ Danach steht in den Einstellungen das Backend `openai-api` zur Auswahl. Lange Au
 | `Online-Links brauchen yt-dlp` | `pip install yt-dlp` |
 | `Sign in to confirm` bei einem Link | In den Einstellungen den Browser für Cookies hinterlegen (Video verlangt Anmeldung) |
 | Sprachausgabe bleibt stumm (Linux) | `sudo apt install espeak-ng` |
+| Ziehen ins Fenster tut nichts | `pip install tkinterdnd2`, danach App neu starten |
 | Erkennung ist ungenau | Sprache fest auf *Deutsch* stellen statt „automatisch“, oder Modell `medium` nehmen |
 | Alles ist zu langsam | Kleineres Modell (`base`) oder mit `--start`/`--dauer` nur den nötigen Ausschnitt |
 
@@ -202,15 +219,16 @@ Danach steht in den Einstellungen das Backend `openai-api` zur Auswahl. Lange Au
 ```
 voice2text/
 ├── __main__.py     Einstieg:  ohne Argumente → Fenster, mit Argumenten → Kommandozeile
-├── app.py          Oberfläche (customtkinter, 5 Reiter)
+├── app.py          Oberfläche (customtkinter, 6 Reiter, Drag & Drop)
 ├── cli.py          Kommandozeile
 ├── pipeline.py     Der Ablauf: Quelle → Ausschnitt → Ton → Text
 ├── media.py        ffmpeg & yt-dlp: Tonspur holen, Online-Links anzapfen
 ├── transcribe.py   Spracherkennung (faster-whisper / whisper / OpenAI-API)
 ├── timecode.py     Zeitangaben lesen und formatieren
 ├── tts.py          Text → Sprache
+├── warteschlange.py Mehrere Aufträge nacheinander (ohne GUI, deshalb testbar)
 ├── einrichten.py   Einrichtungs-Assistent mit Selbsttest
-└── tests/          55 Tests (8 davon mit echtem ffmpeg, sonst übersprungen)
+└── tests/          74 Tests (8 davon mit echtem ffmpeg, sonst übersprungen)
 ```
 
 Tests ausführen:

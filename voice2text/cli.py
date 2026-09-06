@@ -20,6 +20,9 @@ Beispiele:
     # als Untertitel speichern
     python -m voice2text video.mp4 --ausgabe untertitel.srt
 
+    # gleich mehrere Videos hintereinander, alles in einen Ordner
+    python -m voice2text *.mp4 --ordner ~/Transkripte
+
     # Text vorlesen lassen
     python -m voice2text --sprich "Hallo Sven, das Transkript ist fertig."
 """
@@ -44,7 +47,8 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("quelle", nargs="?", help="Dateipfad oder Online-Link")
+    parser.add_argument("quelle", nargs="*",
+                        help="Dateipfad oder Online-Link – auch mehrere hintereinander")
 
     schnitt = parser.add_argument_group("Ausschnitt")
     schnitt.add_argument("--start", "-s", help="Startzeit, z. B. 12:30 · 1:05:20 · 90 · 1h2m3s")
@@ -118,6 +122,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 1
 
+    if len(args.quelle) > 1 and args.ausgabe:
+        print("❌ --ausgabe schreibt in genau eine Datei. Bei mehreren Quellen bitte --ordner nehmen.",
+              file=sys.stderr)
+        return 1
+
     # ── Sprache → Text ────────────────────────────────────────
     sprache = None if str(args.sprache).lower() in ("auto", "automatisch", "") else args.sprache
     if sprache and sprache in LANGUAGES:          # auch "Deutsch" statt "de" erlauben
@@ -129,38 +138,56 @@ def main(argv: list[str] | None = None) -> int:
         prefix = f"[{share * 100:3.0f}%] " if isinstance(share, float) else "       "
         print(prefix + str(message), file=sys.stderr)
 
-    job = Job(
-        source=args.quelle,
-        start=args.start,
-        end=args.ende,
-        duration=args.dauer,
-        backend=args.backend,
-        model=args.modell,
-        language=sprache,
-        cookies_from_browser=args.cookies,
-    )
+    mehrere = len(args.quelle) > 1
+    fehlgeschlagen = 0
 
-    try:
-        transcript = run_job(job, progress=report)
-    except Exception as exc:
-        print(f"\n❌ {exc}", file=sys.stderr)
-        return 1
+    for nummer, quelle in enumerate(args.quelle, start=1):
+        if mehrere and not args.still:
+            print(f"\n── [{nummer}/{len(args.quelle)}] {quelle}", file=sys.stderr)
 
-    if args.ausgabe:
-        path = transcript.export(args.ausgabe, with_timestamps=args.zeitstempel)
-        print(f"💾 Gespeichert: {path}")
-    elif args.ordner:
-        for path in save_all_formats(transcript, args.ordner):
-            print(f"💾 {path}")
-    else:
-        print(transcript.to_text(with_timestamps=args.zeitstempel))
+        job = Job(
+            source=quelle,
+            start=args.start,
+            end=args.ende,
+            duration=args.dauer,
+            backend=args.backend,
+            model=args.modell,
+            language=sprache,
+            cookies_from_browser=args.cookies,
+        )
 
-    if not args.still:
-        info = f"🗣️ {transcript.language or '?'} · {len(transcript.segments)} Abschnitte"
-        if transcript.duration:
-            info += f" · {format_hms(transcript.duration)}"
-        print(info, file=sys.stderr)
-    return 0
+        try:
+            transcript = run_job(job, progress=report)
+        except Exception as exc:
+            print(f"❌ {quelle}: {exc}", file=sys.stderr)
+            fehlgeschlagen += 1
+            # Bei mehreren Quellen bringt Aufgeben nichts – die übrigen
+            # Videos können ja trotzdem in Ordnung sein.
+            if not mehrere:
+                return 1
+            continue
+
+        if args.ausgabe:
+            path = transcript.export(args.ausgabe, with_timestamps=args.zeitstempel)
+            print(f"💾 Gespeichert: {path}")
+        elif args.ordner:
+            for path in save_all_formats(transcript, args.ordner):
+                print(f"💾 {path}")
+        else:
+            if mehrere:
+                print(f"\n=== {transcript.title or quelle} ===")
+            print(transcript.to_text(with_timestamps=args.zeitstempel))
+
+        if not args.still:
+            info = f"🗣️ {transcript.language or '?'} · {len(transcript.segments)} Abschnitte"
+            if transcript.duration:
+                info += f" · {format_hms(transcript.duration)}"
+            print(info, file=sys.stderr)
+
+    if mehrere and not args.still:
+        geschafft = len(args.quelle) - fehlgeschlagen
+        print(f"\n✅ {geschafft} von {len(args.quelle)} Quellen transkribiert.", file=sys.stderr)
+    return 1 if fehlgeschlagen else 0
 
 
 if __name__ == "__main__":
