@@ -21,6 +21,8 @@
 | 💾 **4 Formate** | `.txt` · `.srt` (Untertitel) · `.vtt` (Web) · `.md` (Archiv) |
 | 🖱️ **Drag & Drop** | Videos einfach ins Fenster ziehen – mehrere landen in der Warteschlange |
 | 📚 **Warteschlange** | Mehrere Videos am Stück, einer nach dem anderen, Fehler stoppen den Rest nicht |
+| 👥 **Sprecher-Erkennung** | Wer sagt was – aus Wortsalat wird ein lesbarer Dialog *(optional)* |
+| 🧾 **Zusammenfassung** | Stichpunkte, Protokoll oder Aufgabenliste statt einer Stunde Text *(optional)* |
 | 🔊 **Text → Sprache** | Transkript oder eigenen Text vorlesen lassen und als Audio speichern |
 | 🔐 **Offline möglich** | Mit `faster-whisper` verlässt kein Ton den Rechner – kein Konto, keine Gebühr |
 | 💻 **Zwei Wege** | Fenster-Oberfläche **oder** Kommandozeile |
@@ -100,7 +102,7 @@ python -m voice2text
 
 **Windows:** `voice2text\START_WINDOWS.bat` doppelklicken.
 
-Sechs Reiter:
+Sieben Reiter:
 
 | Reiter | Wofür |
 |---|---|
@@ -108,8 +110,9 @@ Sechs Reiter:
 | 🌐 **Online-Link** | Link einfügen, optional Start/Ende, starten |
 | 📚 **Warteschlange** | Mehrere Videos am Stück – Fortschritt, Fehler, fertige Transkripte auf einen Blick |
 | 📝 **Transkript** | Ergebnis lesen, kopieren, speichern, vorlesen lassen |
+| 🧾 **Zusammenfassung** | Stichpunkte, Protokoll, Aufgabenliste *(braucht API-Schlüssel)* |
 | 🔊 **Vorlesen** | Beliebigen Text zu Sprache – Stimme und Tempo einstellbar |
-| ⚙️ **Einstellungen** | Modell, Sprache, Backend, Ausgabeordner, Systemstatus |
+| ⚙️ **Einstellungen** | Modell, Sprache, Backend, Sprecher, Ausgabeordner, Systemstatus |
 
 ### Mehrere Videos auf einmal
 
@@ -148,6 +151,12 @@ python -m voice2text video.mp4 --ordner ~/Transkripte
 
 # gleich mehrere Videos hintereinander
 python -m voice2text video1.mp4 video2.mp4 video3.mp4 --ordner ~/Transkripte
+
+# Gespräch mit Sprechern, dazu ein Protokoll
+python -m voice2text besprechung.mp4 --sprecher --zusammenfassung protokoll
+
+# nur die Aufgabenliste aus einer Besprechung
+python -m voice2text besprechung.mp4 -z aufgaben
 
 # Text vorlesen lassen
 python -m voice2text --sprich "Hallo Sven, das Transkript ist fertig."
@@ -199,6 +208,65 @@ Danach steht in den Einstellungen das Backend `openai-api` zur Auswahl. Lange Au
 
 ---
 
+## 👥 Sprecher-Erkennung *(optional)*
+
+Statt einer Textwurst wird daraus ein Gespräch:
+
+```
+Sprecher 1: Und wie war dein Wochenende?
+
+Sprecher 2: Ganz gut, wir waren wandern.
+```
+
+Wer zuerst spricht, ist Sprecher 1. Die Namen stehen auch in den Untertiteln
+und im Markdown-Export.
+
+Einrichtung – drei Schritte, alles kostenlos:
+
+1. `pip install pyannote.audio`
+2. Konto auf [huggingface.co](https://huggingface.co) anlegen und auf der Seite
+   `pyannote/speaker-diarization-3.1` die Nutzungsbedingungen bestätigen
+3. Zugriffs-Token unter *Settings → Tokens* erzeugen und in die `.env` eintragen:
+   `HUGGINGFACE_TOKEN=hf_...`
+
+Danach in den Einstellungen den Haken bei *Wer sagt was?* setzen, oder auf der
+Kommandozeile `--sprecher` mitgeben. Ist die Zahl der Sprecher bekannt, hilft
+`--sprecherzahl 2` der Erkennung spürbar.
+
+Klappt etwas davon nicht, läuft die Transkription trotzdem durch – es fehlen
+dann nur die Namen.
+
+---
+
+## 🧾 Zusammenfassung *(optional, kostet Geld)*
+
+Aus einer Stunde Transkript werden zehn Zeilen. Fünf Arten stehen zur Wahl:
+
+| Art | Ergebnis |
+|---|---|
+| `stichpunkte` | Die wichtigsten Punkte als Liste *(Standard)* |
+| `fliesstext` | Ein zusammenhängender Absatz |
+| `protokoll` | Themen · Beschlüsse · Offene Fragen |
+| `aufgaben` | Nur: wer macht was bis wann |
+| `kurz` | Drei Sätze, mehr nicht |
+
+Dafür wird ein Sprachmodell gebraucht – entweder
+
+```bash
+pip install anthropic     # dann ANTHROPIC_API_KEY in die .env
+pip install openai        # oder OPENAI_API_KEY (hat, wer die Cloud-Erkennung nutzt)
+```
+
+**Zwei Dinge, die man wissen sollte:** Der Text verlässt dabei den Rechner, und
+jede Anfrage kostet ein paar Cent. Lange Transkripte werden automatisch in
+Häppchen zerlegt und die Teilergebnisse anschließend verdichtet.
+
+Das Modell wird ausdrücklich angewiesen, nichts zu ergänzen, was nicht im Text
+steht – Spracherkennung macht Hörfehler, und ein Sprachmodell füllt Lücken
+sonst bereitwillig mit Erfundenem.
+
+---
+
 ## 🩺 Wenn etwas klemmt
 
 | Meldung | Lösung |
@@ -209,6 +277,8 @@ Danach steht in den Einstellungen das Backend `openai-api` zur Auswahl. Lange Au
 | `Sign in to confirm` bei einem Link | In den Einstellungen den Browser für Cookies hinterlegen (Video verlangt Anmeldung) |
 | Sprachausgabe bleibt stumm (Linux) | `sudo apt install espeak-ng` |
 | Ziehen ins Fenster tut nichts | `pip install tkinterdnd2`, danach App neu starten |
+| Sprecher-Erkennung wird übersprungen | Token fehlt oder Nutzungsbedingungen auf huggingface.co nicht bestätigt |
+| Zusammenfassung nicht möglich | Kein `ANTHROPIC_API_KEY` bzw. `OPENAI_API_KEY` in der `.env` |
 | Erkennung ist ungenau | Sprache fest auf *Deutsch* stellen statt „automatisch“, oder Modell `medium` nehmen |
 | Alles ist zu langsam | Kleineres Modell (`base`) oder mit `--start`/`--dauer` nur den nötigen Ausschnitt |
 
@@ -219,7 +289,7 @@ Danach steht in den Einstellungen das Backend `openai-api` zur Auswahl. Lange Au
 ```
 voice2text/
 ├── __main__.py     Einstieg:  ohne Argumente → Fenster, mit Argumenten → Kommandozeile
-├── app.py          Oberfläche (customtkinter, 6 Reiter, Drag & Drop)
+├── app.py          Oberfläche (customtkinter, 7 Reiter, Drag & Drop)
 ├── cli.py          Kommandozeile
 ├── pipeline.py     Der Ablauf: Quelle → Ausschnitt → Ton → Text
 ├── media.py        ffmpeg & yt-dlp: Tonspur holen, Online-Links anzapfen
@@ -227,8 +297,10 @@ voice2text/
 ├── timecode.py     Zeitangaben lesen und formatieren
 ├── tts.py          Text → Sprache
 ├── warteschlange.py Mehrere Aufträge nacheinander (ohne GUI, deshalb testbar)
+├── sprecher.py     Sprecher-Erkennung und Zuordnung zu den Sätzen
+├── zusammenfassung.py Transkript → Stichpunkte, Protokoll, Aufgabenliste
 ├── einrichten.py   Einrichtungs-Assistent mit Selbsttest
-└── tests/          74 Tests (8 davon mit echtem ffmpeg, sonst übersprungen)
+└── tests/          119 Tests (8 davon mit echtem ffmpeg, sonst übersprungen)
 ```
 
 Tests ausführen:

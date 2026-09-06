@@ -39,7 +39,10 @@ except ImportError as exc:  # pragma: no cover – nur ohne GUI-Pakete
 from . import media, tts
 from .pipeline import Job, safe_filename, save_all_formats
 from .timecode import format_hms
+from .sprecher import sprecher_status
 from .transcribe import LANGUAGES, MODELS, Transcript, available_backends, backend_status
+from .zusammenfassung import ARTEN as ZF_ARTEN
+from .zusammenfassung import ZusammenfassungError, zusammenfassen, zusammenfassung_status
 from .warteschlange import FEHLER, FERTIG, LAEUFT, WARTET, Auftrag, Warteschlange
 
 # ── DRAG & DROP (optional) ────────────────────────────────────
@@ -92,6 +95,9 @@ def load_settings() -> dict:
         "output_dir": str(DEFAULT_OUTPUT),
         "auto_save": True,
         "cookies_browser": "",
+        "sprecher": False,
+        "sprecherzahl": "",
+        "zf_art": "stichpunkte",
     }
     try:
         if SETTINGS_FILE.exists():
@@ -131,6 +137,7 @@ class VoiceApp(_Fenster):
         self.settings = load_settings()
         self.transcript: Transcript | None = None
         self.messages: queue.Queue = queue.Queue()
+        self.zf_laeuft = False
         self.schlange = Warteschlange(ereignis=self._schlangen_ereignis)
 
         self.title("🎙️ Voice2Text – Video & Sprache zu Text")
@@ -185,6 +192,7 @@ class VoiceApp(_Fenster):
         self.tab_link = self.tabs.add("🌐 Online-Link")
         self.tab_queue = self.tabs.add("📚 Warteschlange")
         self.tab_text = self.tabs.add("📝 Transkript")
+        self.tab_sum = self.tabs.add("🧾 Zusammenfassung")
         self.tab_tts = self.tabs.add("🔊 Vorlesen")
         self.tab_cfg = self.tabs.add("⚙️ Einstellungen")
 
@@ -192,6 +200,7 @@ class VoiceApp(_Fenster):
         self._build_tab_link()
         self._build_tab_queue()
         self._build_tab_text()
+        self._build_tab_sum()
         self._build_tab_tts()
         self._build_tab_settings()
 
@@ -371,6 +380,93 @@ class VoiceApp(_Fenster):
         )
         self.transcript_box.pack(fill="both", expand=True, padx=18, pady=(8, 14))
 
+    # ---------- 🧾 ZUSAMMENFASSUNG ----------
+    def _build_tab_sum(self):
+        frame = self.tab_sum
+        ctk.CTkLabel(
+            frame, text="Das Wichtigste in Kürze",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).pack(anchor="w", padx=18, pady=(16, 2))
+        ctk.CTkLabel(
+            frame,
+            text=("Aus einer Stunde Transkript werden zehn Zeilen.\n"
+                  "Dafür wird der Text an ein Sprachmodell geschickt – das kostet pro Anfrage\n"
+                  "und verlässt den Rechner. Ohne API-Schlüssel bleibt dieser Reiter untätig,\n"
+                  "alles andere funktioniert weiterhin."),
+            text_color=CLR_GREY, justify="left",
+        ).pack(anchor="w", padx=18, pady=(0, 12))
+
+        leiste = ctk.CTkFrame(frame, fg_color="transparent")
+        leiste.pack(fill="x", padx=18, pady=(0, 10))
+        ctk.CTkLabel(leiste, text="Art", text_color=CLR_GREY).pack(side="left")
+        self.zf_art_menu = ctk.CTkOptionMenu(
+            leiste, values=list(ZF_ARTEN), width=180, command=self._on_zf_art_change)
+        self.zf_art_menu.set(self.settings.get("zf_art", "stichpunkte"))
+        self.zf_art_menu.pack(side="left", padx=(8, 12))
+        self.zf_hint = ctk.CTkLabel(
+            leiste, text=ZF_ARTEN.get(self.settings.get("zf_art", "stichpunkte"), ""),
+            text_color=CLR_GREY)
+        self.zf_hint.pack(side="left")
+
+        ctk.CTkButton(leiste, text="📋 Kopieren", width=120,
+                      command=self._copy_summary).pack(side="right", padx=(8, 0))
+        ctk.CTkButton(
+            leiste, text="🧾 Zusammenfassen", width=180,
+            fg_color=CLR_ACCENT, text_color="#101010", hover_color="#d4ac0d",
+            command=self._zusammenfassen_klick,
+        ).pack(side="right")
+
+        self.summary_box = ctk.CTkTextbox(
+            frame, fg_color=CLR_BG, font=ctk.CTkFont(size=14), wrap="word")
+        self.summary_box.pack(fill="both", expand=True, padx=18, pady=(4, 14))
+
+    def _on_zf_art_change(self, wert: str):
+        self.zf_hint.configure(text=ZF_ARTEN.get(wert, ""))
+
+    def _zusammenfassen_klick(self):
+        if not self._require_transcript():
+            return
+        if self.zf_laeuft:
+            self._log("🧾 Läuft bereits.")
+            return
+
+        text = self.transcript.text
+        art = self.zf_art_menu.get()
+        self.zf_laeuft = True
+        self._log(f"🧾 Zusammenfassung wird erstellt ({art}) …")
+
+        def arbeit():
+            try:
+                ergebnis = zusammenfassen(
+                    text, art=art,
+                    progress=lambda anteil, meldung: self.messages.put(("log", meldung)),
+                )
+                self.messages.put(("zusammenfassung", ergebnis))
+            except ZusammenfassungError as exc:
+                self.messages.put(("zusammenfassung_fehler", str(exc)))
+            except Exception as exc:
+                self.messages.put(("zusammenfassung_fehler", str(exc)))
+
+        threading.Thread(target=arbeit, daemon=True).start()
+
+    def _zeige_zusammenfassung(self, text: str):
+        self.zf_laeuft = False
+        if self.transcript:
+            self.transcript.summary = text
+        self.summary_box.delete("1.0", "end")
+        self.summary_box.insert("1.0", text)
+        self.tabs.set("🧾 Zusammenfassung")
+        self._log("🧾 Zusammenfassung fertig.")
+
+    def _copy_summary(self):
+        text = self.summary_box.get("1.0", "end").strip()
+        if not text:
+            messagebox.showinfo("Noch nichts da", "Es gibt noch keine Zusammenfassung.")
+            return
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self._log("📋 Zusammenfassung kopiert.")
+
     # ---------- 🔊 VORLESEN ----------
     def _build_tab_tts(self):
         frame = self.tab_tts
@@ -461,6 +557,19 @@ class VoiceApp(_Fenster):
         ctk.CTkCheckBox(wrap, text="Fertige Transkripte automatisch dort speichern (txt · srt · vtt · md)",
                         variable=self.autosave_var, fg_color=CLR_ACCENT,
                         hover_color=CLR_ACCENT).pack(anchor="w", padx=10, pady=(10, 0))
+
+        # Sprecher
+        box = section("👥 Sprecher-Erkennung (optional)")
+        self.sprecher_var = ctk.BooleanVar(value=bool(self.settings.get("sprecher", False)))
+        ctk.CTkCheckBox(box, text="Wer sagt was?", variable=self.sprecher_var,
+                        fg_color=CLR_ACCENT, hover_color=CLR_ACCENT).pack(
+            side="left", padx=14, pady=14)
+        ctk.CTkLabel(box, text="Anzahl (falls bekannt)", text_color=CLR_GREY).pack(side="left")
+        self.sprecherzahl_var = StringVar(value=str(self.settings.get("sprecherzahl", "")))
+        ctk.CTkEntry(box, textvariable=self.sprecherzahl_var, width=60,
+                     placeholder_text="z. B. 2").pack(side="left", padx=(8, 14))
+        ctk.CTkLabel(box, text="Braucht pyannote.audio und ein Hugging-Face-Token.",
+                     text_color=CLR_GREY).pack(side="left")
 
         # Cookies
         box = section("🍪 Browser-Cookies für Online-Links (optional)")
@@ -586,6 +695,9 @@ class VoiceApp(_Fenster):
             "output_dir": self.output_var.get(),
             "auto_save": bool(self.autosave_var.get()),
             "cookies_browser": self.cookies_var.get(),
+            "sprecher": bool(self.sprecher_var.get()),
+            "sprecherzahl": self.sprecherzahl_var.get(),
+            "zf_art": self.zf_art_menu.get(),
         }
 
     def _save_settings_clicked(self):
@@ -594,7 +706,8 @@ class VoiceApp(_Fenster):
         self._log("💾 Einstellungen gespeichert.")
 
     def _check_environment(self):
-        lines = [media.ffmpeg_status(), backend_status(), tts.tts_status()]
+        lines = [media.ffmpeg_status(), backend_status(), tts.tts_status(),
+                 sprecher_status(), zusammenfassung_status()]
         try:
             import yt_dlp  # noqa: F401
             yt_dlp_da = True
@@ -637,7 +750,17 @@ class VoiceApp(_Fenster):
             model=self.model_menu.get(),
             language=LANGUAGES.get(self.language_menu.get()),
             cookies_from_browser=self.cookies_var.get() or None,
+            sprecher=bool(self.sprecher_var.get()),
+            sprecherzahl=self._sprecherzahl(),
         )
+
+    def _sprecherzahl(self) -> int | None:
+        """Leeres oder unsinniges Feld heißt schlicht: Anzahl unbekannt."""
+        try:
+            zahl = int(str(self.sprecherzahl_var.get()).strip())
+            return zahl if zahl > 0 else None
+        except (TypeError, ValueError):
+            return None
 
     def _start_file_job(self, sofort: bool = True):
         quelle = self.file_var.get().strip()
@@ -727,6 +850,12 @@ class VoiceApp(_Fenster):
                 elif art == "leer":
                     self._schlange_fertig()
                     neu_zeichnen = True
+                elif art == "zusammenfassung":
+                    self._zeige_zusammenfassung(str(wert))
+                elif art == "zusammenfassung_fehler":
+                    self.zf_laeuft = False
+                    self._log(f"⚠️ Zusammenfassung nicht möglich: {str(wert).splitlines()[0]}")
+                    messagebox.showinfo("Zusammenfassung nicht möglich", str(wert))
                 elif art == "hinweis":
                     messagebox.showerror("Das hat nicht geklappt", str(wert))
         except queue.Empty:

@@ -19,7 +19,13 @@ pyttsx3>=2.90               # offline, Stimmen des Betriebssystems
 tkinterdnd2>=0.3.0          # Dateien ins Fenster ziehen (ohne das Paket
                             #   bleibt der Dateidialog, sonst ändert sich nichts)
 
-# ── Optional ──────────────────────────────────────────────────
-# openai>=1.12.0            # Cloud-Erkennung statt lokal (braucht OPENAI_API_KEY)
+# ── Optional: braucht Konto oder kostet Geld ──────────────────
+# Alles hier ist freiwillig. Die App läuft ohne jede dieser Zeilen
+# vollständig offline und kostenlos.
+#
+# openai>=1.12.0            # Cloud-Erkennung statt lokal (OPENAI_API_KEY)
+#                           #   und zugleich Zusammenfassungen
+# anthropic>=0.40.0         # Zusammenfassungen mit Claude (ANTHROPIC_API_KEY)
+# pyannote.audio>=3.1.0     # Sprecher-Erkennung (Hugging-Face-Konto + Token)
 # gTTS>=2.5.0               # natürlicher klingende MP3-Sprachausgabe (online)
 # openai-whisper>=20231117  # das Original-Whisper als Alternative

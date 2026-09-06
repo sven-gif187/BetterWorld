@@ -78,9 +78,15 @@ class Segment:
     start: float
     end: float
     text: str
+    speaker: str | None = None      # gefüllt, wenn die Sprecher-Erkennung lief
 
     def shifted(self, offset: float) -> "Segment":
-        return Segment(self.start + offset, self.end + offset, self.text)
+        return Segment(self.start + offset, self.end + offset, self.text, self.speaker)
+
+    def mit_sprecher(self) -> str:
+        """Text mit vorangestelltem Sprecher, falls bekannt."""
+        text = self.text.strip()
+        return f"{self.speaker}: {text}" if self.speaker else text
 
 
 @dataclass
@@ -95,8 +101,14 @@ class Transcript:
     origin: str = ""
     offset: float = 0.0
     duration: float | None = None
+    summary: str = ""               # gefüllt, wenn zusammengefasst wurde
 
     # ── Text in verschiedenen Geschmacksrichtungen ────────────
+    @property
+    def hat_sprecher(self) -> bool:
+        """True, wenn zu mindestens einem Abschnitt ein Sprecher bekannt ist."""
+        return any(s.speaker for s in self.segments)
+
     @property
     def text(self) -> str:
         """Nur der Fließtext, ohne Zeitangaben."""
@@ -104,12 +116,32 @@ class Transcript:
 
     def to_text(self, with_timestamps: bool = False) -> str:
         if not with_timestamps:
-            return self.text
+            return self.to_dialog() if self.hat_sprecher else self.text
         return "\n".join(
-            f"[{format_hms(s.start)} – {format_hms(s.end)}] {s.text.strip()}"
+            f"[{format_hms(s.start)} – {format_hms(s.end)}] {s.mit_sprecher()}"
             for s in self.segments
             if s.text.strip()
         )
+
+    def to_dialog(self, with_timestamps: bool = False) -> str:
+        """
+        Als Gespräch aufbereitet – ein Absatz je Wortbeitrag.
+
+        Ohne Sprecher-Erkennung ist das schlicht der Fließtext; sonst
+        werden aufeinanderfolgende Sätze derselben Person gebündelt,
+        damit nicht vor jedem Halbsatz erneut der Name steht.
+        """
+        from .sprecher import nach_sprecher_buendeln
+
+        if not self.hat_sprecher:
+            return self.text
+
+        zeilen = []
+        for sprecher, start, ende, text in nach_sprecher_buendeln(self.segments):
+            kopf = f"[{format_hms(start)}] " if with_timestamps else ""
+            name = f"{sprecher}: " if sprecher else ""
+            zeilen.append(f"{kopf}{name}{text}")
+        return "\n\n".join(zeilen)
 
     def to_srt(self) -> str:
         """Untertitel-Format für VLC, YouTube, Premiere & Co."""
@@ -120,7 +152,7 @@ class Transcript:
             blocks.append(
                 f"{index}\n"
                 f"{format_timestamp(seg.start)} --> {format_timestamp(seg.end)}\n"
-                f"{seg.text.strip()}\n"
+                f"{seg.mit_sprecher()}\n"
             )
         return "\n".join(blocks)
 
@@ -133,7 +165,7 @@ class Transcript:
             lines.append(
                 f"{format_timestamp(seg.start, '.')} --> {format_timestamp(seg.end, '.')}"
             )
-            lines.append(seg.text.strip())
+            lines.append(seg.mit_sprecher())
             lines.append("")
         return "\n".join(lines)
 
@@ -148,8 +180,15 @@ class Transcript:
             head.append(f"- **Länge:** {format_hms(self.duration)}")
         head.append(f"- **Sprache:** {self.language or 'unbekannt'}")
         head.append(f"- **Erkannt mit:** {self.backend} / {self.model}")
+        if self.hat_sprecher:
+            stimmen = len({s.speaker for s in self.segments if s.speaker})
+            head.append(f"- **Sprecher:** {stimmen}")
         head += ["", "---", ""]
-        return "\n".join(head) + "\n" + self.to_text(with_timestamps=True) + "\n"
+        if self.summary:
+            head += ["## Zusammenfassung", "", self.summary, "", "---", ""]
+        koerper = (self.to_dialog(with_timestamps=True) if self.hat_sprecher
+                   else self.to_text(with_timestamps=True))
+        return "\n".join(head) + "\n" + koerper + "\n"
 
     def export(self, path: str | Path, with_timestamps: bool = True) -> Path:
         """Speichert je nach Dateiendung als .srt, .vtt, .md oder .txt."""

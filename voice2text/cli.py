@@ -23,6 +23,9 @@ Beispiele:
     # gleich mehrere Videos hintereinander, alles in einen Ordner
     python -m voice2text *.mp4 --ordner ~/Transkripte
 
+    # Gespräch mit Sprecher-Erkennung, dazu ein Protokoll
+    python -m voice2text besprechung.mp4 --sprecher --zusammenfassung protokoll
+
     # Text vorlesen lassen
     python -m voice2text --sprich "Hallo Sven, das Transkript ist fertig."
 """
@@ -36,6 +39,7 @@ from pathlib import Path
 from . import tts
 from .media import ffmpeg_status
 from .pipeline import Job, run_job, save_all_formats
+from .zusammenfassung import ARTEN, ZusammenfassungError, zusammenfassen
 from .timecode import format_hms
 from .transcribe import LANGUAGES, MODELS, backend_status
 
@@ -64,12 +68,19 @@ def build_parser() -> argparse.ArgumentParser:
                            choices=["auto", "faster-whisper", "whisper", "openai-api"],
                            help="Welcher Erkenner benutzt wird (Standard: auto)")
     erkennung.add_argument("--cookies", help="Browser für Cookies bei Login-Videos: chrome, firefox, edge …")
+    erkennung.add_argument("--sprecher", action="store_true",
+                           help="Wer sagt was? (braucht pyannote.audio + Hugging-Face-Token)")
+    erkennung.add_argument("--sprecherzahl", type=int,
+                           help="Anzahl der Sprecher, falls bekannt – hilft der Erkennung")
 
     ausgabe = parser.add_argument_group("Ausgabe")
     ausgabe.add_argument("--ausgabe", "-o", help="Zieldatei (.txt · .srt · .vtt · .md)")
     ausgabe.add_argument("--ordner", help="Alle vier Formate in diesen Ordner schreiben")
     ausgabe.add_argument("--zeitstempel", action="store_true", help="Zeitstempel mit ausgeben")
     ausgabe.add_argument("--still", action="store_true", help="Keine Fortschrittsmeldungen")
+    ausgabe.add_argument("--zusammenfassung", "-z", nargs="?", const="stichpunkte",
+                         choices=list(ARTEN),
+                         help="Transkript zusätzlich zusammenfassen (Standard: stichpunkte)")
 
     extra = parser.add_argument_group("Sonstiges")
     extra.add_argument("--sprich", help="Diesen Text vorlesen (Text → Sprache)")
@@ -81,10 +92,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _print_status() -> None:
+    from .sprecher import sprecher_status
+    from .zusammenfassung import zusammenfassung_status
+
     print("🩺 Systemstatus")
     print("   " + ffmpeg_status())
     print("   " + backend_status())
     print("   " + tts.tts_status())
+    print("   " + sprecher_status())
+    print("   " + zusammenfassung_status())
     try:
         import yt_dlp  # noqa: F401
         print("   ✅ Online-Links: yt-dlp bereit")
@@ -154,6 +170,8 @@ def main(argv: list[str] | None = None) -> int:
             model=args.modell,
             language=sprache,
             cookies_from_browser=args.cookies,
+            sprecher=args.sprecher,
+            sprecherzahl=args.sprecherzahl,
         )
 
         try:
@@ -167,6 +185,16 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             continue
 
+        if args.zusammenfassung:
+            try:
+                transcript.summary = zusammenfassen(
+                    transcript.text, art=args.zusammenfassung, progress=report
+                )
+            except ZusammenfassungError as exc:
+                # Das Transkript ist fertig – daran soll eine fehlende
+                # Zusammenfassung nichts ändern.
+                print(f"⚠️ Zusammenfassung nicht möglich: {exc}", file=sys.stderr)
+
         if args.ausgabe:
             path = transcript.export(args.ausgabe, with_timestamps=args.zeitstempel)
             print(f"💾 Gespeichert: {path}")
@@ -176,6 +204,10 @@ def main(argv: list[str] | None = None) -> int:
         else:
             if mehrere:
                 print(f"\n=== {transcript.title or quelle} ===")
+            if transcript.summary:
+                print("--- Zusammenfassung ---")
+                print(transcript.summary)
+                print("--- Transkript ---")
             print(transcript.to_text(with_timestamps=args.zeitstempel))
 
         if not args.still:

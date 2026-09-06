@@ -41,6 +41,8 @@ class Job:
     model: str = "small"
     language: str | None = None       # "de", "en", None = automatisch
     cookies_from_browser: str | None = None
+    sprecher: bool = False            # wer sagt was? (braucht pyannote.audio)
+    sprecherzahl: int | None = None   # bekannte Anzahl hilft der Erkennung
 
 
 def safe_filename(name: str, fallback: str = "transkript") -> str:
@@ -96,12 +98,49 @@ def run_job(job: Job, progress: ProgressFn | None = None) -> Transcript:
             duration=prepared.duration,
             progress=report,
         )
+
+        if job.sprecher:
+            _sprecher_zuordnen(job, prepared, result, report)
     finally:
         prepared.cleanup()
 
     words = len(result.text.split())
-    report(1.0, f"✅ Fertig: {len(result.segments)} Abschnitte · {words} Wörter")
+    schluss = f"✅ Fertig: {len(result.segments)} Abschnitte · {words} Wörter"
+    if result.hat_sprecher:
+        schluss += f" · {len({s.speaker for s in result.segments if s.speaker})} Sprecher"
+    report(1.0, schluss)
     return result
+
+
+def _sprecher_zuordnen(job: Job, prepared, result: Transcript, report: ProgressFn) -> None:
+    """
+    Hängt die Sprecher-Erkennung an ein fertiges Transkript.
+
+    Schlägt sie fehl, ist das kein Grund, die ganze Arbeit wegzuwerfen –
+    das Transkript steht ja schon. Es gibt dann nur eine Meldung und
+    weiter geht es ohne Namen.
+    """
+    from .sprecher import SprecherError, diarisieren, zuordnen
+
+    try:
+        abschnitte = diarisieren(
+            prepared.audio_path,
+            sprecherzahl=job.sprecherzahl,
+            progress=report,
+        )
+    except SprecherError as exc:
+        report(None, f"⚠️ Sprecher-Erkennung übersprungen: {str(exc).splitlines()[0]}")
+        return
+
+    # Die Erkennung rechnet ab Null, das Transkript ab dem Startpunkt im
+    # Original – beide müssen auf dieselbe Zeitachse, sonst passt nichts.
+    if prepared.offset:
+        abschnitte = [
+            type(a)(a.start + prepared.offset, a.end + prepared.offset, a.sprecher)
+            for a in abschnitte
+        ]
+
+    zuordnen(result.segments, abschnitte)
 
 
 def save_all_formats(transcript: Transcript, folder: str | Path, stem: str | None = None) -> list[Path]:
