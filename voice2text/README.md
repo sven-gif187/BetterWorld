@@ -27,6 +27,34 @@
 
 ## ⚙️ Installation
 
+### Der bequeme Weg: der Einrichtungs-Assistent
+
+```bash
+python voice2text/einrichten.py
+```
+
+**Windows:** einfach `voice2text\EINRICHTEN_WINDOWS.bat` doppelklicken.
+
+Der Assistent geht sechs Schritte durch, fragt vor jeder Installation nach und macht
+am Ende einen **Selbsttest**: Der Rechner spricht einen Satz, die App liest ihn wieder
+heraus. Kommt der Satz zurück, funktioniert die ganze Kette.
+
+```
+1️⃣  Python-Version      ✅ 3.11.15
+2️⃣  Pakete              ✅ installiert
+3️⃣  ffmpeg              ✅ gefunden
+4️⃣  Spracherkennung     ✅ Modell bereit
+5️⃣  Selbsttest          ✅ bestanden
+```
+
+Nur nachsehen, ohne etwas zu installieren:
+
+```bash
+python voice2text/einrichten.py --nur-pruefen
+```
+
+### Der kurze Weg
+
 ```bash
 pip install -r voice2text/requirements.txt
 ```
@@ -67,6 +95,8 @@ python -m voice2text --status
 ```bash
 python -m voice2text
 ```
+
+**Windows:** `voice2text\START_WINDOWS.bat` doppelklicken.
 
 Fünf Reiter:
 
@@ -179,7 +209,8 @@ voice2text/
 ├── transcribe.py   Spracherkennung (faster-whisper / whisper / OpenAI-API)
 ├── timecode.py     Zeitangaben lesen und formatieren
 ├── tts.py          Text → Sprache
-└── tests/          47 Tests, laufen ohne Zusatzpakete
+├── einrichten.py   Einrichtungs-Assistent mit Selbsttest
+└── tests/          55 Tests (8 davon mit echtem ffmpeg, sonst übersprungen)
 ```
 
 Tests ausführen:

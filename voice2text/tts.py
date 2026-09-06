@@ -15,6 +15,8 @@ Beide Pakete sind optional. Fehlt beides, sagt die App das freundlich.
 
 from __future__ import annotations
 
+import contextlib
+import io
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -164,8 +166,11 @@ def save_speech(
 
     engine = _new_engine(voice, rate)
     try:
-        engine.save_to_file(text, str(path))
-        engine.runAndWait()
+        # Der espeak-Treiber schreibt ungefragt "Audio saved to …" auf die
+        # Konsole – das gehört nicht in unsere Ausgabe.
+        with contextlib.redirect_stdout(io.StringIO()):
+            engine.save_to_file(text, str(path))
+            engine.runAndWait()
     except Exception as exc:
         raise TtsError(f"Die Audiodatei konnte nicht geschrieben werden: {exc}") from exc
     finally:

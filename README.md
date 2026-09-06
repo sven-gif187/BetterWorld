@@ -94,7 +94,7 @@ Video oder Online-Link rein, lesbarer Text raus. Mit Uhrzeit im Link wird **nur 
 gewünschte Stelle** geladen statt des ganzen Videos.
 
 ```bash
-pip install -r voice2text/requirements.txt
+python voice2text/einrichten.py            # richtet alles ein und testet sich selbst
 python -m voice2text                       # Oberfläche
 python -m voice2text video.mp4 --start 12:30 --dauer 90
 ```
