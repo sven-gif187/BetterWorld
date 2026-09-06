@@ -28,3 +28,17 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# 🎙️ voice2text – Ausgaben und Zwischenstände
+Transkripte/
+transkripte/
+.voice2text.json
+*.srt
+*.vtt
+voice2text_test_*/
+
+# 🔐 Weitere Geheimnis-Dateien
+.env.*
+!.env.example
+*.key
+*.pem

@@ -107,6 +107,14 @@ def _print_status() -> None:
     except ImportError:
         print("   ⚠️ Online-Links brauchen yt-dlp (pip install yt-dlp)")
 
+    from .konfig import env_datei_finden, gesetzte_schluessel
+
+    datei = env_datei_finden()
+    print(f"   📄 .env: {datei}" if datei else "   📄 .env: keine gefunden (nur nötig für Zusatzfunktionen)")
+    schluessel = gesetzte_schluessel()
+    # Nur die Namen – ein Schlüssel hat auf dem Bildschirm nichts verloren.
+    print("   🔑 Schlüssel gefunden: " + (" · ".join(schluessel) if schluessel else "keine"))
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()

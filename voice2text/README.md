@@ -208,6 +208,36 @@ Danach steht in den Einstellungen das Backend `openai-api` zur Auswahl. Lange Au
 
 ---
 
+## 🔑 Schlüssel hinterlegen
+
+Die Zusatzfunktionen brauchen Schlüssel. Die gehören in eine Datei namens `.env`
+im Projektordner – **nicht** in den Quelltext:
+
+```
+HUGGINGFACE_TOKEN=hf_...      # Sprecher-Erkennung (kostenlos)
+ANTHROPIC_API_KEY=sk-ant-...  # Zusammenfassung mit Claude
+OPENAI_API_KEY=sk-...         # Cloud-Transkription und/oder Zusammenfassung
+```
+
+Als Vorlage dient [`env.example`](../env.example) – kopieren und in `.env` umbenennen.
+
+Die Datei wird beim Start automatisch eingelesen, ohne Zusatzpaket. Zwei Regeln:
+
+- **Echte Umgebungsvariablen haben Vorrang.** Wer einen Schlüssel in der Konsole
+  setzt, dem redet die Datei nicht rein.
+- **Werte werden nie angezeigt.** `--status` nennt nur die Namen der gefundenen
+  Schlüssel, nie deren Inhalt.
+
+Die `.env` steht in der `.gitignore` und landet damit nicht auf GitHub.
+
+Prüfen, ob alles ankommt:
+
+```bash
+python -m voice2text --status
+```
+
+---
+
 ## 👥 Sprecher-Erkennung *(optional)*
 
 Statt einer Textwurst wird daraus ein Gespräch:
@@ -279,6 +309,7 @@ sonst bereitwillig mit Erfundenem.
 | Ziehen ins Fenster tut nichts | `pip install tkinterdnd2`, danach App neu starten |
 | Sprecher-Erkennung wird übersprungen | Token fehlt oder Nutzungsbedingungen auf huggingface.co nicht bestätigt |
 | Zusammenfassung nicht möglich | Kein `ANTHROPIC_API_KEY` bzw. `OPENAI_API_KEY` in der `.env` |
+| Schlüssel wird nicht gefunden | `python -m voice2text --status` zeigt, welche `.env` gelesen wurde |
 | Erkennung ist ungenau | Sprache fest auf *Deutsch* stellen statt „automatisch“, oder Modell `medium` nehmen |
 | Alles ist zu langsam | Kleineres Modell (`base`) oder mit `--start`/`--dauer` nur den nötigen Ausschnitt |
 
@@ -296,11 +327,12 @@ voice2text/
 ├── transcribe.py   Spracherkennung (faster-whisper / whisper / OpenAI-API)
 ├── timecode.py     Zeitangaben lesen und formatieren
 ├── tts.py          Text → Sprache
+├── konfig.py       .env einlesen (ohne Zusatzpaket, Werte nie protokolliert)
 ├── warteschlange.py Mehrere Aufträge nacheinander (ohne GUI, deshalb testbar)
 ├── sprecher.py     Sprecher-Erkennung und Zuordnung zu den Sätzen
 ├── zusammenfassung.py Transkript → Stichpunkte, Protokoll, Aufgabenliste
 ├── einrichten.py   Einrichtungs-Assistent mit Selbsttest
-└── tests/          119 Tests (8 davon mit echtem ffmpeg, sonst übersprungen)
+└── tests/          137 Tests (8 davon mit echtem ffmpeg, sonst übersprungen)
 ```
 
 Tests ausführen:

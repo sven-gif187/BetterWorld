@@ -718,6 +718,13 @@ class VoiceApp(_Fenster):
         lines.append("✅ Drag & Drop: aktiv" if DND_DA
                      else "⚠️ Drag & Drop braucht tkinterdnd2 (pip install tkinterdnd2)")
 
+        from .konfig import env_datei_finden, gesetzte_schluessel
+        datei = env_datei_finden()
+        lines.append(f"📄 .env: {datei}" if datei else "📄 .env: keine gefunden (nur für Zusatzfunktionen nötig)")
+        schluessel = gesetzte_schluessel()
+        # Nur Namen anzeigen – ein Schlüssel gehört nicht auf den Bildschirm.
+        lines.append("🔑 Schlüssel: " + (" · ".join(schluessel) if schluessel else "keine"))
+
         # Oben rechts ist wenig Platz – dort nur Häkchen, die Sätze stehen
         # ausführlich im Reiter "Einstellungen".
         def marke(name: str, da: bool) -> str:

@@ -70,6 +70,9 @@ TELEGRAM_CHAT_ID=deine_chat_id
 
 > **Telegram optional** – ohne Token läuft der Bot, sendet aber keine Nachrichten.
 
+> **Hinweis:** Die `.env` steht in der `.gitignore` und wird damit nicht auf GitHub
+> hochgeladen. Deine Token bleiben auf deinem Rechner.
+
 ### 4. Bot starten
 ```bash
 python sven_imperium_paper.py
