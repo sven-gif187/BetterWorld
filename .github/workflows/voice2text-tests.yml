@@ -13,6 +13,10 @@ name: voice2text – Tests
 
 on:
   push:
+    # Nur der Hauptzweig. Ohne diese Einschränkung liefe bei jedem Push auf
+    # einen Zweig mit offenem Pull Request alles doppelt – einmal für "push"
+    # und einmal für "pull_request".
+    branches: [main]
     paths:
       - "voice2text/**"
       - ".github/workflows/voice2text-tests.yml"
