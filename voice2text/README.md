@@ -352,3 +352,21 @@ Beim Laden von Online-Videos gelten die Nutzungsbedingungen der jeweiligen Platt
 <div align="center">
   Made with ❤️ · Teil von <a href="../README.md">BetterWorld</a>
 </div>
+
+---
+
+## 📄 Eine einzige Datei
+
+Wer die App nur benutzen und nicht daran entwickeln will, braucht den Ordner nicht.
+Im Projektstamm liegt **[`voice2text_komplett.py`](../voice2text_komplett.py)** – dieselbe
+App, alles in einer Datei. Herunterladen, doppelklicken, fertig. Fehlende Bausteine holt
+sie beim ersten Start selbst, nachdem sie gefragt hat.
+
+Die Datei wird erzeugt, nicht von Hand gepflegt:
+
+```bash
+python werkzeug/einzeldatei_bauen.py
+```
+
+Änderungen gehören also in `voice2text/`, nicht in die Einzeldatei – dort wären sie beim
+nächsten Bauen wieder weg.

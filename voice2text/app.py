@@ -29,11 +29,17 @@ try:
     import customtkinter as ctk
     from tkinter import StringVar, filedialog, messagebox
 except ImportError as exc:  # pragma: no cover – nur ohne GUI-Pakete
+    fehlt_tkinter = "tkinter" in str(exc)
     raise SystemExit(
-        "Für die Oberfläche fehlt customtkinter:\n\n"
-        "    pip install customtkinter\n\n"
-        "Ohne Oberfläche geht es auch:  python -m voice2text --hilfe\n"
-        f"(Ursprünglicher Fehler: {exc})"
+        ("Für die Oberfläche fehlt tkinter – das gehört zu Python selbst:\n\n"
+         "    Linux :  sudo apt install python3-tk\n"
+         "    Mac   :  brew install python-tk\n"
+         "    Windows: Python neu installieren und dabei 'tcl/tk' anhaken\n\n"
+         if fehlt_tkinter else
+         "Für die Oberfläche fehlt customtkinter:\n\n"
+         "    pip install customtkinter\n\n")
+        + "Ohne Oberfläche geht es auch:  python -m voice2text --hilfe\n"
+        + f"(Ursprünglicher Fehler: {exc})"
     )
 
 from . import media, tts

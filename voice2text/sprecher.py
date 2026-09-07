@@ -85,7 +85,7 @@ def _token() -> str | None:
     return None
 
 
-def _paket_da() -> bool:
+def _pyannote_da() -> bool:
     import importlib.util
     try:
         return importlib.util.find_spec("pyannote.audio") is not None
@@ -95,14 +95,14 @@ def _paket_da() -> bool:
 
 def verfuegbar() -> bool:
     """True, wenn Paket und Token beide da sind."""
-    return _paket_da() and bool(_token())
+    return _pyannote_da() and bool(_token())
 
 
 def sprecher_status() -> str:
     """Statuszeile für die Oberfläche."""
     if verfuegbar():
         return "✅ Sprecher-Erkennung: bereit"
-    if _paket_da():
+    if _pyannote_da():
         return "⚠️ Sprecher-Erkennung: pyannote.audio da, aber HUGGINGFACE_TOKEN fehlt"
     return "⚠️ Sprecher-Erkennung: nicht eingerichtet (optional)"
 
@@ -126,7 +126,7 @@ def diarisieren(
     """
     melden: ProgressFn = progress or (lambda anteil, text: None)
 
-    if not _paket_da():
+    if not _pyannote_da():
         raise SprecherError("pyannote.audio ist nicht installiert.\n\n" + ANLEITUNG)
     token = _token()
     if not token:
