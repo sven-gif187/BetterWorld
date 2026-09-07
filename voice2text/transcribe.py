@@ -20,6 +20,8 @@ automatisch den besten installierten.
 from __future__ import annotations
 
 import os
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
@@ -35,6 +37,10 @@ __all__ = [
     "available_backends",
     "backend_status",
     "transcribe",
+    "MODELL_MB",
+    "modell_ordner",
+    "modell_schon_da",
+    "ordner_groesse",
 ]
 
 ProgressFn = Callable[[float | None, str], None]
@@ -62,6 +68,70 @@ LANGUAGES: dict[str, str | None] = {
 }
 
 _MODEL_CACHE: dict[tuple, object] = {}
+
+# Ungefähre Größe der Modelldateien in MB – nur zum Anzeigen des
+# Fortschritts, deshalb dürfen die Zahlen ruhig gerundet sein.
+MODELL_MB = {"tiny": 75, "base": 145, "small": 484, "medium": 1530, "large-v3": 3090}
+
+
+def modell_ordner(model: str) -> Path:
+    """
+    Wo Hugging Face das Modell ablegt.
+
+    Der Ort lässt sich über Umgebungsvariablen verschieben; ohne die
+    landet alles unter ~/.cache/huggingface/hub.
+    """
+    cache = os.getenv("HF_HUB_CACHE")
+    if cache:
+        basis = Path(cache)
+    else:
+        basis = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface")) / "hub"
+    return basis / f"models--Systran--faster-whisper-{model}"
+
+
+def ordner_groesse(ordner: Path) -> int:
+    """Belegte Bytes eines Ordners. Fehlt er, sind es null."""
+    try:
+        return sum(f.stat().st_size for f in ordner.rglob("*") if f.is_file())
+    except OSError:
+        return 0
+
+
+def modell_schon_da(model: str) -> bool:
+    """
+    Liegt das Modell schon vollständig auf der Platte?
+
+    Als Maßstab dient die halbe erwartete Größe – ein abgebrochener
+    Download hinterlässt Bruchstücke, die nicht als "fertig" durchgehen
+    sollen.
+    """
+    erwartet = MODELL_MB.get(model)
+    if not erwartet:
+        return modell_ordner(model).exists()
+    return ordner_groesse(modell_ordner(model)) > erwartet * 500_000
+
+
+def _download_beobachten(model: str, melden: ProgressFn, fertig: threading.Event) -> None:
+    """
+    Meldet, wie weit der Modell-Download ist.
+
+    Ohne das schweigt die App beim ersten Start fünf bis zehn Minuten
+    am Stück – man sieht den Fortschritt nur im Konsolenfenster, wo
+    niemand hinschaut. Gemessen wird schlicht, wie der Ordner wächst.
+    """
+    ordner = modell_ordner(model)
+    ziel = MODELL_MB.get(model)
+    begonnen = time.monotonic()
+
+    while not fertig.wait(2.0):
+        mb = ordner_groesse(ordner) / 1_000_000
+        vergangen = int(time.monotonic() - begonnen)
+        uhr = f"{vergangen // 60}:{vergangen % 60:02d}"
+        if ziel and mb >= 1:
+            melden(min(mb / ziel, 0.99),
+                   f"📦 Modell wird geladen … {mb:.0f} von rund {ziel} MB   ({uhr})")
+        else:
+            melden(None, f"📦 Verbindung zum Modell-Server …   ({uhr})")
 
 
 class TranscriptionError(RuntimeError):
@@ -266,12 +336,32 @@ def _run_faster_whisper(
 
     key = ("faster-whisper", model)
     if key not in _MODEL_CACHE:
-        progress(None, f"📦 Modell '{model}' wird geladen (beim ersten Mal wird es heruntergeladen) …")
+        erstmalig = not modell_schon_da(model)
+        if erstmalig:
+            groesse = MODELL_MB.get(model, "?")
+            progress(None, f"📦 Modell '{model}' fehlt noch – rund {groesse} MB werden geholt.")
+            progress(None, "   Das passiert nur dieses eine Mal und dauert ein paar Minuten.")
+        else:
+            progress(None, f"📦 Modell '{model}' wird geladen …")
+
+        # Während das Modell kommt, alle zwei Sekunden melden, wie weit es ist.
+        fertig = threading.Event()
+        if erstmalig:
+            threading.Thread(
+                target=_download_beobachten, args=(model, progress, fertig), daemon=True
+            ).start()
+
         try:
-            _MODEL_CACHE[key] = WhisperModel(model, device="auto", compute_type="int8")
-        except Exception:
-            # Manche Umgebungen mögen device="auto" nicht – dann eben CPU.
-            _MODEL_CACHE[key] = WhisperModel(model, device="cpu", compute_type="int8")
+            try:
+                _MODEL_CACHE[key] = WhisperModel(model, device="auto", compute_type="int8")
+            except Exception:
+                # Manche Umgebungen mögen device="auto" nicht – dann eben CPU.
+                _MODEL_CACHE[key] = WhisperModel(model, device="cpu", compute_type="int8")
+        finally:
+            fertig.set()
+
+        if erstmalig:
+            progress(None, "📦 Modell liegt jetzt auf der Platte – beim nächsten Mal geht es sofort los.")
     whisper_model = _MODEL_CACHE[key]
 
     progress(0.0, "🧠 Spracherkennung läuft …")
