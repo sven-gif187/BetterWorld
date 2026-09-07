@@ -156,9 +156,11 @@ def probe_duration(path: str | Path) -> float | None:
 
     ffprobe = find_ffprobe()
     if ffprobe:
+        # Der Pfad steht hinter "-i": sonst würde eine Datei, deren Name mit
+        # einem Bindestrich beginnt, als Befehlsoption gelesen.
         result = _run(
             [ffprobe, "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", path],
+             "-of", "default=noprint_wrappers=1:nokey=1", "-i", path],
             "ffprobe",
         )
         text = (result.stdout or "").strip()

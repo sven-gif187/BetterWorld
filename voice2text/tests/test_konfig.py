@@ -9,7 +9,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from voice2text.konfig import env_datei_finden, env_laden, env_lesen, gesetzte_schluessel
+from voice2text.konfig import (
+    GESPERRTE_NAMEN,
+    env_datei_finden,
+    env_laden,
+    env_lesen,
+    gesetzte_schluessel,
+)
 
 
 def schreibe(ordner: Path, inhalt: str) -> Path:
@@ -114,6 +120,61 @@ class Laden(unittest.TestCase):
 
     def test_fehlende_datei_ist_kein_fehler(self):
         self.assertEqual(env_laden("/gibt/es/nicht/.env"), [])
+
+
+class GefaehrlicheNamen(unittest.TestCase):
+    """
+    Eine .env wird auch in übergeordneten Ordnern gesucht – womöglich in
+    einem fremden Projekt, das gerade heruntergeladen wurde. Variablen, die
+    steuern, welche Programme und Bibliotheken geladen werden, dürfen von
+    dort niemals übernommen werden: die App startet ffmpeg und yt-dlp als
+    eigene Programme, das wäre sonst ein Weg zu fremdem Code.
+    """
+
+    def setUp(self):
+        self.sicherung = dict(os.environ)
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.sicherung)
+
+    def test_bibliothekspfade_werden_nicht_uebernommen(self):
+        with tempfile.TemporaryDirectory() as t:
+            datei = schreibe(Path(t), (
+                "LD_PRELOAD=/tmp/boese.so\n"
+                "LD_LIBRARY_PATH=/tmp/boese\n"
+                "DYLD_INSERT_LIBRARIES=/tmp/boese.dylib\n"
+                "PYTHONPATH=/tmp/boese\n"
+                "PYTHONSTARTUP=/tmp/boese.py\n"
+                "PATH=/tmp/boese\n"
+                "BASH_ENV=/tmp/boese.sh\n"
+            ))
+            gesetzt = env_laden(datei, ueberschreiben=True)
+        self.assertEqual(gesetzt, [], "keine dieser Variablen darf durchkommen")
+        self.assertNotIn("LD_PRELOAD", os.environ)
+        self.assertNotIn("PYTHONSTARTUP", os.environ)
+
+    def test_programmpfade_werden_nicht_uebernommen(self):
+        """FFMPEG_BIN zeigt direkt auf eine ausführbare Datei."""
+        with tempfile.TemporaryDirectory() as t:
+            datei = schreibe(Path(t), "FFMPEG_BIN=/tmp/boese\nFFPROBE_BIN=/tmp/boese\n")
+            self.assertEqual(env_laden(datei, ueberschreiben=True), [])
+
+    def test_kleinschreibung_hilft_nicht(self):
+        with tempfile.TemporaryDirectory() as t:
+            datei = schreibe(Path(t), "ld_preload=/tmp/boese.so\n")
+            self.assertEqual(env_laden(datei, ueberschreiben=True), [])
+
+    def test_schluessel_kommen_weiterhin_durch(self):
+        """Die Sperre darf die eigentliche Aufgabe nicht kaputt machen."""
+        with tempfile.TemporaryDirectory() as t:
+            datei = schreibe(Path(t), "LD_PRELOAD=/tmp/boese.so\nOPENAI_API_KEY=sk-gut\n")
+            self.assertEqual(env_laden(datei, ueberschreiben=True), ["OPENAI_API_KEY"])
+            self.assertEqual(os.environ["OPENAI_API_KEY"], "sk-gut")
+
+    def test_die_bekannten_schluessel_sind_nicht_gesperrt(self):
+        for name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "HUGGINGFACE_TOKEN"):
+            self.assertNotIn(name, GESPERRTE_NAMEN)
 
 
 class Suche(unittest.TestCase):

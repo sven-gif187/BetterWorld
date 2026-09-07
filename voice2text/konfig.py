@@ -19,6 +19,9 @@ Zwei Regeln, die man kennen sollte:
     Konsole setzt, will ihn auch benutzen – die Datei überschreibt ihn nicht.
   • Werte werden niemals protokolliert. Was hier gelesen wird, taucht in
     keiner Meldung und in keinem Protokoll auf.
+  • Variablen, die steuern, welche Programme und Bibliotheken geladen
+    werden (PATH, LD_PRELOAD, PYTHONPATH …), werden aus einer Datei
+    grundsätzlich nicht übernommen – siehe GESPERRTE_NAMEN.
 """
 
 from __future__ import annotations
@@ -26,7 +29,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-__all__ = ["env_datei_finden", "env_lesen", "env_laden", "gesetzte_schluessel"]
+__all__ = [
+    "env_datei_finden", "env_lesen", "env_laden",
+    "gesetzte_schluessel", "GESPERRTE_NAMEN",
+]
 
 # Die Namen, auf die es ankommt – nur zur Anzeige, nie mit Wert.
 BEKANNTE_SCHLUESSEL = (
@@ -35,6 +41,30 @@ BEKANNTE_SCHLUESSEL = (
     "HUGGINGFACE_TOKEN",
     "HF_TOKEN",
 )
+
+# Diese Variablen werden aus einer .env NIEMALS übernommen.
+#
+# Der Grund: die App startet ffmpeg und yt-dlp als eigene Programme.
+# Wer bestimmen kann, welche Bibliotheken dabei geladen werden oder wo
+# nach Programmen gesucht wird, kann eigenen Code ausführen lassen.
+# Und eine .env liegt nicht immer da, wo man sie vermutet – gesucht wird
+# auch in den übergeordneten Ordnern, also womöglich in einem fremden
+# Projekt, das man sich gerade heruntergeladen hat.
+#
+# Wer diese Variablen wirklich braucht, setzt sie in der Konsole. Von dort
+# kommen sie aus einer bewussten Entscheidung, nicht aus einer Datei.
+GESPERRTE_NAMEN = frozenset({
+    # Programme und Bibliotheken finden
+    "PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT",
+    "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH",
+    # Python selbst umbiegen
+    "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONEXECUTABLE",
+    "PYTHONWARNINGS", "PYTHONINSPECT",
+    # Shell-Einsprungpunkte
+    "BASH_ENV", "ENV", "IFS", "SHELL", "COMSPEC",
+    # Unsere eigenen Programmpfade – zeigen direkt auf eine ausführbare Datei
+    "FFMPEG_BIN", "FFPROBE_BIN",
+})
 
 
 def env_datei_finden(start: str | Path | None = None) -> Path | None:
@@ -118,6 +148,8 @@ def env_laden(pfad: str | Path | None = None, ueberschreiben: bool = False) -> l
 
     gesetzt = []
     for name, wert in env_lesen(datei).items():
+        if name.upper() in GESPERRTE_NAMEN:
+            continue                           # siehe GESPERRTE_NAMEN oben
         if ueberschreiben or not os.getenv(name):
             os.environ[name] = wert
             gesetzt.append(name)
