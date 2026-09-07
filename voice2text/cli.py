@@ -51,6 +51,10 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
+    # Die App spricht Deutsch, also darf auch die Hilfe deutsch heißen.
+    # "-h" und "--help" bleiben daneben bestehen.
+    parser.add_argument("--hilfe", action="help", help="Diese Hilfe anzeigen und beenden")
+
     parser.add_argument("quelle", nargs="*",
                         help="Dateipfad oder Online-Link – auch mehrere hintereinander")
 
