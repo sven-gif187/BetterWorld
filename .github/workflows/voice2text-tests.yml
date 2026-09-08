@@ -32,7 +32,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.10", "3.11", "3.12"]
+        # 3.13 gehört dazu, weil die App dort tatsächlich benutzt wird –
+        # die CI soll prüfen, was die Leute wirklich fahren, nicht nur
+        # was gerade bequem ist.
+        python: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
