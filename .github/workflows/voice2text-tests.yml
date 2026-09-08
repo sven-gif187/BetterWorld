@@ -1,0 +1,65 @@
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  Automatische Tests für voice2text                           ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+# Läuft bei jedem Push und bei jedem Pull Request, der voice2text
+# anfasst. Geprüft wird auf drei Python-Fassungen, damit nichts
+# durchrutscht, was nur auf einer läuft.
+#
+# Die Tests brauchen weder Netz noch Schlüssel noch ein Konto:
+# ffmpeg kommt über imageio-ffmpeg, alles andere ist Standard-Bibliothek.
+
+name: voice2text – Tests
+
+on:
+  push:
+    # Nur der Hauptzweig. Ohne diese Einschränkung liefe bei jedem Push auf
+    # einen Zweig mit offenem Pull Request alles doppelt – einmal für "push"
+    # und einmal für "pull_request".
+    branches: [main]
+    paths:
+      - "voice2text/**"
+      - ".github/workflows/voice2text-tests.yml"
+  pull_request:
+    paths:
+      - "voice2text/**"
+      - ".github/workflows/voice2text-tests.yml"
+  workflow_dispatch:        # von Hand auslösbar
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.13 gehört dazu, weil die App dort tatsächlich benutzt wird –
+        # die CI soll prüfen, was die Leute wirklich fahren, nicht nur
+        # was gerade bequem ist.
+        python: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python ${{ matrix.python }} einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: ffmpeg bereitstellen
+        # Damit auch die acht Integrationstests laufen und nicht
+        # stillschweigend übersprungen werden.
+        run: pip install imageio-ffmpeg
+
+      - name: Module lassen sich übersetzen
+        run: python -m compileall -q voice2text
+
+      - name: Tests
+        run: python -m unittest discover -s voice2text/tests -t . -v
+
+      - name: Kommandozeile antwortet
+        run: |
+          python -m voice2text --status
+          python -m voice2text --hilfe > /dev/null
+
+      - name: Einrichtungs-Assistent kommt durch
+        run: python voice2text/einrichten.py --nur-pruefen || true

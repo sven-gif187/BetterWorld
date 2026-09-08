@@ -70,6 +70,9 @@ TELEGRAM_CHAT_ID=deine_chat_id
 
 > **Telegram optional** – ohne Token läuft der Bot, sendet aber keine Nachrichten.
 
+> **Hinweis:** Die `.env` steht in der `.gitignore` und wird damit nicht auf GitHub
+> hochgeladen. Deine Token bleiben auf deinem Rechner.
+
 ### 4. Bot starten
 ```bash
 python sven_imperium_paper.py
@@ -83,6 +86,24 @@ python sven_imperium_paper.py
 2. Schreibe `/newbot` → folge den Anweisungen → kopiere den Token
 3. Suche **@userinfobot** → schreibe `/start` → kopiere deine Chat-ID
 4. Beides in deine `.env` eintragen
+
+---
+
+## 🧰 Weitere Tools in diesem Repo
+
+### 🎙️ [voice2text](voice2text/) – Video & Sprache zu Text
+
+Video oder Online-Link rein, lesbarer Text raus. Mit Uhrzeit im Link wird **nur die
+gewünschte Stelle** geladen statt des ganzen Videos.
+
+```bash
+python voice2text/einrichten.py            # richtet alles ein und testet sich selbst
+python -m voice2text                       # Oberfläche
+python -m voice2text video.mp4 --start 12:30 --dauer 90
+```
+
+Läuft komplett offline (faster-whisper), speichert als `.txt` · `.srt` · `.vtt` · `.md`
+und kann Texte auch wieder vorlesen. → [Anleitung](voice2text/README.md)
 
 ---
 
