@@ -1,0 +1,8 @@
+# Fertige Transkripte und Sprachausgaben bleiben lokal
+*.srt
+*.vtt
+transkripte/
+Transkripte/
+ausgabe/
+*.wav
+*.mp3
