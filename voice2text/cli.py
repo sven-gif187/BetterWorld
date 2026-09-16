@@ -26,6 +26,12 @@ Beispiele:
     # Gespräch mit Sprecher-Erkennung, dazu ein Protokoll
     python -m voice2text besprechung.mp4 --sprecher --zusammenfassung protokoll
 
+    # englisches Video, deutscher Text
+    python -m voice2text vortrag.mp4 --sprache en --uebersetzen Deutsch
+
+    # deutsches Video, englischer Text (kostenlos, offline)
+    python -m voice2text video.mp4 --uebersetzen Englisch
+
     # Text vorlesen lassen
     python -m voice2text --sprich "Hallo Sven, das Transkript ist fertig."
 """
@@ -39,6 +45,7 @@ from pathlib import Path
 from . import tts
 from .media import ffmpeg_status
 from .pipeline import Job, run_job, save_all_formats
+from .uebersetzung import SPRACHEN, UebersetzungError, sprachname, uebersetzen
 from .zusammenfassung import ARTEN, ZusammenfassungError, zusammenfassen
 from .timecode import format_hms
 from .transcribe import LANGUAGES, MODELS, backend_status
@@ -76,6 +83,10 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Wer sagt was? (braucht pyannote.audio + Hugging-Face-Token)")
     erkennung.add_argument("--sprecherzahl", type=int,
                            help="Anzahl der Sprecher, falls bekannt – hilft der Erkennung")
+    erkennung.add_argument("--uebersetzen", "-u", metavar="SPRACHE",
+                           help="Zielsprache, z. B. Englisch oder de. Nach Englisch macht "
+                                "Whisper es kostenlos und offline mit; alles andere braucht "
+                                "argostranslate oder einen API-Schlüssel")
 
     ausgabe = parser.add_argument_group("Ausgabe")
     ausgabe.add_argument("--ausgabe", "-o", help="Zieldatei (.txt · .srt · .vtt · .md)")
@@ -97,6 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _print_status() -> None:
     from .sprecher import sprecher_status
+    from .uebersetzung import uebersetzung_status
     from .zusammenfassung import zusammenfassung_status
 
     print("🩺 Systemstatus")
@@ -105,6 +117,7 @@ def _print_status() -> None:
     print("   " + tts.tts_status())
     print("   " + sprecher_status())
     print("   " + zusammenfassung_status())
+    print("   " + uebersetzung_status())
     try:
         import yt_dlp  # noqa: F401
         print("   ✅ Online-Links: yt-dlp bereit")
@@ -184,6 +197,7 @@ def main(argv: list[str] | None = None) -> int:
             cookies_from_browser=args.cookies,
             sprecher=args.sprecher,
             sprecherzahl=args.sprecherzahl,
+            uebersetzen_nach=args.uebersetzen,
         )
 
         try:
@@ -219,6 +233,10 @@ def main(argv: list[str] | None = None) -> int:
             if transcript.summary:
                 print("--- Zusammenfassung ---")
                 print(transcript.summary)
+            if transcript.translation:
+                print(f"--- Übersetzung ({transcript.translation_language}) ---")
+                print(transcript.translation)
+            if transcript.summary or transcript.translation:
                 print("--- Transkript ---")
             print(transcript.to_text(with_timestamps=args.zeitstempel))
 

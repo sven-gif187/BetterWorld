@@ -37,6 +37,7 @@ REIHENFOLGE = [
     "sprecher.py",
     "transcribe.py",
     "zusammenfassung.py",
+    "uebersetzung.py",
     "tts.py",
     "pipeline.py",
     "warteschlange.py",
@@ -54,7 +55,8 @@ UMBENENNEN = {
 # In einer einzigen Datei gibt es keine Module mehr. Wer "tts.speak()"
 # schreibt, meint dann schlicht "speak()". Diese Präfixe werden entfernt.
 MODULNAMEN = ["media", "tts", "konfig", "timecode", "transcribe",
-              "sprecher", "zusammenfassung", "pipeline", "warteschlange"]
+              "sprecher", "zusammenfassung", "uebersetzung", "pipeline",
+              "warteschlange"]
 # "media.prepare_source" muss aufgelöst werden, "media.py" in einem
 # Kommentar dagegen nicht – deshalb sind Dateiendungen ausgenommen.
 ENDUNGEN = ("py", "md", "txt", "json", "yml", "yaml", "bat", "srt", "vtt")
@@ -164,7 +166,10 @@ def bauen() -> Path:
 
     # Harmlos: identische Hilfsfunktionen und Typkürzel, die mehrfach
     # gleich definiert sind. Alles andere muss umbenannt werden.
-    unbedenklich = {"_module_available", "ProgressFn", "__all__"}
+    # Mehrfach, aber Zeichen für Zeichen gleich – da ist es einerlei,
+    # welche Fassung in der Einzeldatei gewinnt.
+    unbedenklich = {"_module_available", "_paket_da", "ProgressFn", "__all__",
+                    "ANTHROPIC_MODELL", "OPENAI_MODELL"}
     echte = [k for k in konflikte if k.strip().split()[0] not in unbedenklich]
     if echte:
         print("❌ Namenskonflikte – bitte erst umbenennen:")

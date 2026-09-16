@@ -46,6 +46,8 @@ from . import media, tts
 from .pipeline import Job, safe_filename, save_all_formats
 from .timecode import format_hms
 from .sprecher import sprecher_status
+from .uebersetzung import SPRACHEN
+from .uebersetzung import UebersetzungError, uebersetzen, uebersetzung_status
 from .transcribe import LANGUAGES, MODELS, Transcript, available_backends, backend_status
 from .zusammenfassung import ARTEN as ZF_ARTEN
 from .zusammenfassung import ZusammenfassungError, zusammenfassen, zusammenfassung_status
@@ -104,6 +106,7 @@ def load_settings() -> dict:
         "sprecher": False,
         "sprecherzahl": "",
         "zf_art": "stichpunkte",
+        "uebersetzen_nach": "Nicht übersetzen",
     }
     try:
         if SETTINGS_FILE.exists():
@@ -144,6 +147,7 @@ class VoiceApp(_Fenster):
         self.transcript: Transcript | None = None
         self.messages: queue.Queue = queue.Queue()
         self.zf_laeuft = False
+        self.trans_laeuft = False
         self.schlange = Warteschlange(ereignis=self._schlangen_ereignis)
 
         self.title("🎙️ Voice2Text – Video & Sprache zu Text")
@@ -199,6 +203,7 @@ class VoiceApp(_Fenster):
         self.tab_queue = self.tabs.add("📚 Warteschlange")
         self.tab_text = self.tabs.add("📝 Transkript")
         self.tab_sum = self.tabs.add("🧾 Zusammenfassung")
+        self.tab_trans = self.tabs.add("🌍 Übersetzung")
         self.tab_tts = self.tabs.add("🔊 Vorlesen")
         self.tab_cfg = self.tabs.add("⚙️ Einstellungen")
 
@@ -207,6 +212,7 @@ class VoiceApp(_Fenster):
         self._build_tab_queue()
         self._build_tab_text()
         self._build_tab_sum()
+        self._build_tab_trans()
         self._build_tab_tts()
         self._build_tab_settings()
 
@@ -473,6 +479,86 @@ class VoiceApp(_Fenster):
         self.clipboard_append(text)
         self._log("📋 Zusammenfassung kopiert.")
 
+    # ---------- 🌍 ÜBERSETZUNG ----------
+    def _build_tab_trans(self):
+        frame = self.tab_trans
+        ctk.CTkLabel(
+            frame, text="Fremdsprachen lesbar machen",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).pack(anchor="w", padx=18, pady=(16, 2))
+        ctk.CTkLabel(
+            frame,
+            text=("Nach Englisch übersetzt Whisper direkt beim Erkennen – kostenlos, offline,\n"
+                  "mit erhaltenen Zeitstempeln. Dafür in den Einstellungen die Zielsprache\n"
+                  "auf Englisch stellen, bevor das Video läuft.\n\n"
+                  "In jede andere Sprache übersetzt ein Übersetzer hinterher. Kostenlos und\n"
+                  "offline geht das mit:   pip install argostranslate"),
+            text_color=CLR_GREY, justify="left",
+        ).pack(anchor="w", padx=18, pady=(0, 12))
+
+        leiste = ctk.CTkFrame(frame, fg_color="transparent")
+        leiste.pack(fill="x", padx=18, pady=(0, 10))
+        ctk.CTkLabel(leiste, text="Nach", text_color=CLR_GREY).pack(side="left")
+        self.trans_ziel_menu = ctk.CTkOptionMenu(leiste, values=list(SPRACHEN), width=180)
+        self.trans_ziel_menu.set("Deutsch")
+        self.trans_ziel_menu.pack(side="left", padx=(8, 12))
+
+        ctk.CTkButton(leiste, text="📋 Kopieren", width=120,
+                      command=self._copy_translation).pack(side="right", padx=(8, 0))
+        ctk.CTkButton(
+            leiste, text="🌍 Jetzt übersetzen", width=180,
+            fg_color=CLR_BLUE, hover_color="#3d87bd",
+            command=self._uebersetzen_klick,
+        ).pack(side="right")
+
+        self.trans_box = ctk.CTkTextbox(
+            frame, fg_color=CLR_BG, font=ctk.CTkFont(size=14), wrap="word")
+        self.trans_box.pack(fill="both", expand=True, padx=18, pady=(4, 14))
+
+    def _uebersetzen_klick(self):
+        if not self._require_transcript():
+            return
+        if self.trans_laeuft:
+            self._log("🌍 Läuft bereits.")
+            return
+
+        text = self.transcript.to_text(with_timestamps=False)
+        ziel = self.trans_ziel_menu.get()
+        quelle = self.transcript.language
+        self.trans_laeuft = True
+        self._log(f"🌍 Übersetzung nach {ziel} wird erstellt …")
+
+        def arbeit():
+            try:
+                ergebnis = uebersetzen(
+                    text, nach=ziel, von=quelle,
+                    progress=lambda anteil, meldung: self.messages.put(("log", meldung)),
+                )
+                self.messages.put(("uebersetzung", (ziel, ergebnis)))
+            except Exception as exc:
+                self.messages.put(("uebersetzung_fehler", str(exc)))
+
+        threading.Thread(target=arbeit, daemon=True).start()
+
+    def _zeige_uebersetzung(self, ziel: str, text: str):
+        self.trans_laeuft = False
+        if self.transcript:
+            self.transcript.translation = text
+            self.transcript.translation_language = ziel
+        self.trans_box.delete("1.0", "end")
+        self.trans_box.insert("1.0", text)
+        self.tabs.set("🌍 Übersetzung")
+        self._log(f"🌍 Übersetzung nach {ziel} fertig.")
+
+    def _copy_translation(self):
+        text = self.trans_box.get("1.0", "end").strip()
+        if not text:
+            messagebox.showinfo("Noch nichts da", "Es gibt noch keine Übersetzung.")
+            return
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self._log("📋 Übersetzung kopiert.")
+
     # ---------- 🔊 VORLESEN ----------
     def _build_tab_tts(self):
         frame = self.tab_tts
@@ -563,6 +649,14 @@ class VoiceApp(_Fenster):
         ctk.CTkCheckBox(wrap, text="Fertige Transkripte automatisch dort speichern (txt · srt · vtt · md)",
                         variable=self.autosave_var, fg_color=CLR_ACCENT,
                         hover_color=CLR_ACCENT).pack(anchor="w", padx=10, pady=(10, 0))
+
+        # Übersetzung
+        box = section("🌍 Übersetzen nach")
+        self.ziel_menu = ctk.CTkOptionMenu(box, values=["Nicht übersetzen"] + list(SPRACHEN), width=200)
+        self.ziel_menu.set(self.settings.get("uebersetzen_nach", "Nicht übersetzen"))
+        self.ziel_menu.pack(side="left", padx=14, pady=14)
+        ctk.CTkLabel(box, text="Englisch erledigt Whisper gleich mit – kostenlos und offline.",
+                     text_color=CLR_GREY).pack(side="left")
 
         # Sprecher
         box = section("👥 Sprecher-Erkennung (optional)")
@@ -704,6 +798,7 @@ class VoiceApp(_Fenster):
             "sprecher": bool(self.sprecher_var.get()),
             "sprecherzahl": self.sprecherzahl_var.get(),
             "zf_art": self.zf_art_menu.get(),
+            "uebersetzen_nach": self.ziel_menu.get(),
         }
 
     def _save_settings_clicked(self):
@@ -713,7 +808,8 @@ class VoiceApp(_Fenster):
 
     def _check_environment(self):
         lines = [media.ffmpeg_status(), backend_status(), tts.tts_status(),
-                 sprecher_status(), zusammenfassung_status()]
+                 sprecher_status(), zusammenfassung_status(),
+                 uebersetzung_status()]
         try:
             import yt_dlp  # noqa: F401
             yt_dlp_da = True
@@ -765,6 +861,8 @@ class VoiceApp(_Fenster):
             cookies_from_browser=self.cookies_var.get() or None,
             sprecher=bool(self.sprecher_var.get()),
             sprecherzahl=self._sprecherzahl(),
+            uebersetzen_nach=(None if self.ziel_menu.get() == "Nicht übersetzen"
+                              else self.ziel_menu.get()),
         )
 
     def _sprecherzahl(self) -> int | None:
@@ -869,6 +967,12 @@ class VoiceApp(_Fenster):
                     self.zf_laeuft = False
                     self._log(f"⚠️ Zusammenfassung nicht möglich: {str(wert).splitlines()[0]}")
                     messagebox.showinfo("Zusammenfassung nicht möglich", str(wert))
+                elif art == "uebersetzung":
+                    self._zeige_uebersetzung(*wert)
+                elif art == "uebersetzung_fehler":
+                    self.trans_laeuft = False
+                    self._log(f"⚠️ Übersetzung nicht möglich: {str(wert).splitlines()[0]}")
+                    messagebox.showinfo("Übersetzung nicht möglich", str(wert))
                 elif art == "hinweis":
                     messagebox.showerror("Das hat nicht geklappt", str(wert))
         except queue.Empty:
@@ -889,6 +993,9 @@ class VoiceApp(_Fenster):
     def _auftrag_fertig(self, auftrag: Auftrag):
         self.transcript = auftrag.transcript
         self._render_transcript()
+        if auftrag.transcript and auftrag.transcript.translation:
+            self.trans_box.delete("1.0", "end")
+            self.trans_box.insert("1.0", auftrag.transcript.translation)
         if self.schlange.offen == 0:
             self.tabs.set("📝 Transkript")
 

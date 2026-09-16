@@ -172,6 +172,8 @@ class Transcript:
     offset: float = 0.0
     duration: float | None = None
     summary: str = ""               # gefüllt, wenn zusammengefasst wurde
+    translation: str = ""           # gefüllt, wenn nachträglich übersetzt wurde
+    translation_language: str = ""  # in welche Sprache
 
     # ── Text in verschiedenen Geschmacksrichtungen ────────────
     @property
@@ -256,6 +258,9 @@ class Transcript:
         head += ["", "---", ""]
         if self.summary:
             head += ["## Zusammenfassung", "", self.summary, "", "---", ""]
+        if self.translation:
+            ziel = self.translation_language or "Übersetzung"
+            head += [f"## Übersetzung ({ziel})", "", self.translation, "", "---", ""]
         koerper = (self.to_dialog(with_timestamps=True) if self.hat_sprecher
                    else self.to_text(with_timestamps=True))
         return "\n".join(head) + "\n" + koerper + "\n"
@@ -330,7 +335,8 @@ def _pick_backend(backend: str) -> str:
 # DIE EINZELNEN BACKENDS
 # ══════════════════════════════════════════════════════════════
 def _run_faster_whisper(
-    audio: Path, model: str, language: str | None, total: float | None, progress: ProgressFn
+    audio: Path, model: str, language: str | None, total: float | None,
+    progress: ProgressFn, task: str = "transcribe",
 ) -> tuple[list[Segment], str | None]:
     from faster_whisper import WhisperModel
 
@@ -365,9 +371,13 @@ def _run_faster_whisper(
     whisper_model = _MODEL_CACHE[key]
 
     progress(0.0, "🧠 Spracherkennung läuft …")
+    if task == "translate":
+        progress(None, "🌍 Wird beim Erkennen direkt ins Englische übersetzt.")
+
     segment_iter, info = whisper_model.transcribe(
         str(audio),
         language=language,
+        task=task,
         beam_size=5,
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 500},
@@ -383,7 +393,8 @@ def _run_faster_whisper(
 
 
 def _run_openai_whisper(
-    audio: Path, model: str, language: str | None, total: float | None, progress: ProgressFn
+    audio: Path, model: str, language: str | None, total: float | None,
+    progress: ProgressFn, task: str = "transcribe",
 ) -> tuple[list[Segment], str | None]:
     import whisper
 
@@ -394,7 +405,7 @@ def _run_openai_whisper(
     whisper_model = _MODEL_CACHE[key]
 
     progress(0.0, "🧠 Spracherkennung läuft (das Original-Whisper meldet sich erst am Ende) …")
-    result = whisper_model.transcribe(str(audio), language=language, verbose=False)
+    result = whisper_model.transcribe(str(audio), language=language, task=task, verbose=False)
     segments = [
         Segment(float(s["start"]), float(s["end"]), str(s["text"]).strip())
         for s in result.get("segments", [])
@@ -404,7 +415,8 @@ def _run_openai_whisper(
 
 
 def _run_openai_api(
-    audio: Path, model: str, language: str | None, total: float | None, progress: ProgressFn
+    audio: Path, model: str, language: str | None, total: float | None,
+    progress: ProgressFn, task: str = "transcribe",
 ) -> tuple[list[Segment], str | None]:
     from openai import OpenAI
 
@@ -423,13 +435,20 @@ def _run_openai_api(
             f"☁️ Teil {index}/{len(chunks)} wird an OpenAI geschickt …",
         )
         with open(chunk_path, "rb") as handle:
-            response = client.audio.transcriptions.create(
-                model=api_model,
-                file=handle,
-                language=language,
-                response_format="verbose_json",
-                timestamp_granularities=["segment"],
-            )
+            if task == "translate":
+                # Die Cloud hat dafür einen eigenen Endpunkt, und der kennt
+                # weder "language" noch Zeitstempel-Feinheiten.
+                response = client.audio.translations.create(
+                    model=api_model, file=handle, response_format="verbose_json",
+                )
+            else:
+                response = client.audio.transcriptions.create(
+                    model=api_model,
+                    file=handle,
+                    language=language,
+                    response_format="verbose_json",
+                    timestamp_granularities=["segment"],
+                )
         detected = getattr(response, "language", None) or detected
         for seg in getattr(response, "segments", None) or []:
             start = float(seg["start"] if isinstance(seg, dict) else seg.start)
@@ -466,6 +485,7 @@ def transcribe(
     origin: str = "",
     duration: float | None = None,
     progress: ProgressFn | None = None,
+    task: str = "transcribe",
 ) -> Transcript:
     """
     Erkennt die Sprache in einer Audiodatei und liefert ein `Transcript`.
@@ -473,6 +493,11 @@ def transcribe(
     `offset` wird auf alle Zeitstempel addiert. Wer also ab Minute 12
     eines Videos transkribiert, bekommt trotzdem Zeitstempel, die zum
     Original passen – praktisch zum Zitieren und Wiederfinden.
+
+    `task="translate"` lässt Whisper gleich beim Erkennen ins Englische
+    übersetzen – kostenlos und offline, aber ausschließlich nach
+    Englisch. Für jede andere Zielsprache ist das Modul uebersetzung.py
+    zuständig.
     """
     audio_path = Path(audio_path)
     if not audio_path.exists():
@@ -482,7 +507,9 @@ def transcribe(
     chosen = _pick_backend(backend)
 
     try:
-        segments, detected = _RUNNERS[chosen](audio_path, model, language, duration, report)
+        segments, detected = _RUNNERS[chosen](
+            audio_path, model, language, duration, report, task
+        )
     except TranscriptionError:
         raise
     except ImportError as exc:

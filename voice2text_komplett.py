@@ -545,6 +545,7 @@ __all__ = [
     "split_audio",
     "looks_like_url",
     "prepare_source",
+    "_yt_fehler_deuten",
     "download_online_audio",
     "AUDIO_SUFFIXES",
     "VIDEO_SUFFIXES",
@@ -872,6 +873,65 @@ def _download_with_binary(
     return path, path.stem, trimmed
 
 
+def _yt_fehler_deuten(meldung: str) -> str:
+    """
+    Übersetzt yt-dlp-Fehler in eine Anweisung, mit der man etwas anfangen kann.
+
+    Die Meldungen sind englisch, technisch und nennen die Lösung nicht.
+    YouTube ändert seine Abwehr zudem regelmäßig, weshalb fast alle
+    Fehler auf zwei Ursachen hinauslaufen: veraltetes yt-dlp oder
+    fehlende Anmeldung.
+    """
+    tief = meldung.lower()
+
+    if "sign in" in tief or "not a bot" in tief or "cookies" in tief:
+        return (
+            "YouTube will eine Anmeldung sehen.\n\n"
+            "Das passiert bei Videos mit Altersfreigabe – und seit einiger Zeit\n"
+            "auch einfach so, wenn YouTube den Zugriff für einen Roboter hält.\n\n"
+            "Lösung: In den Einstellungen unter '🍪 Browser-Cookies' deinen\n"
+            "Browser auswählen (chrome, firefox, edge …). Die App benutzt dann\n"
+            "deine normale YouTube-Anmeldung. Wichtig: Der Browser muss dabei\n"
+            "geschlossen sein, sonst gibt er die Cookies nicht her."
+        )
+
+    if ("unable to extract" in tief or "player response" in tief
+            or "nsig" in tief or "signature" in tief):
+        return (
+            "yt-dlp kommt mit dieser YouTube-Fassung nicht zurecht.\n\n"
+            "YouTube ändert seinen Aufbau ständig; yt-dlp zieht meist innerhalb\n"
+            "weniger Tage nach. Fast immer hilft eine neuere Fassung:\n\n"
+            "    pip install --upgrade yt-dlp\n\n"
+            "Danach die App neu starten."
+        )
+
+    if "video unavailable" in tief or "private" in tief or "removed" in tief:
+        return (
+            "Das Video ist nicht abrufbar – privat, gelöscht oder in\n"
+            "Deutschland gesperrt. Ein anderes Video probieren."
+        )
+
+    if "http error 403" in tief or "forbidden" in tief:
+        return (
+            "YouTube hat den Zugriff abgelehnt (403).\n\n"
+            "Meist hilft ein Update:  pip install --upgrade yt-dlp\n"
+            "Sonst dasselbe wie oben: Browser-Cookies in den Einstellungen."
+        )
+
+    if "unsupported url" in tief or "no video" in tief:
+        return (
+            "Mit diesem Link kann yt-dlp nichts anfangen.\n\n"
+            "Er sollte direkt auf ein Video zeigen, nicht auf eine Playlist,\n"
+            "einen Kanal oder eine Suchseite. Bei YouTube sieht ein richtiger\n"
+            "Link so aus:  https://www.youtube.com/watch?v=…"
+        )
+
+    if "timed out" in tief or "connection" in tief or "network" in tief:
+        return "Die Verbindung ist abgebrochen. Internet prüfen und nochmal versuchen."
+
+    return ""
+
+
 def download_online_audio(
     url: str,
     workdir: Path,
@@ -894,12 +954,15 @@ def download_online_audio(
         raise
     except Exception as exc:                       # yt-dlp wirft eigene Fehlertypen
         message = str(exc).strip() or exc.__class__.__name__
-        if "Sign in" in message or "cookies" in message.lower():
-            message += (
-                "\n\nTipp: Bei Videos mit Altersfreigabe oder Login hilft es, in den "
-                "Einstellungen den Browser für Cookies zu hinterlegen."
-            )
-        raise MediaError(f"Der Link konnte nicht geladen werden:\n{message}") from exc
+        rat = _yt_fehler_deuten(message)
+        if rat:
+            raise MediaError(f"{rat}\n\n(Originalmeldung: {message[:300]})") from exc
+        raise MediaError(
+            f"Der Link konnte nicht geladen werden:\n{message}\n\n"
+            "Zwei Dinge, die fast immer helfen:\n"
+            "  1. pip install --upgrade yt-dlp\n"
+            "  2. In den Einstellungen die Browser-Cookies hinterlegen"
+        ) from exc
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1396,6 +1459,8 @@ class Transcript:
     offset: float = 0.0
     duration: float | None = None
     summary: str = ""               # gefüllt, wenn zusammengefasst wurde
+    translation: str = ""           # gefüllt, wenn nachträglich übersetzt wurde
+    translation_language: str = ""  # in welche Sprache
 
     # ── Text in verschiedenen Geschmacksrichtungen ────────────
     @property
@@ -1479,6 +1544,9 @@ class Transcript:
         head += ["", "---", ""]
         if self.summary:
             head += ["## Zusammenfassung", "", self.summary, "", "---", ""]
+        if self.translation:
+            ziel = self.translation_language or "Übersetzung"
+            head += [f"## Übersetzung ({ziel})", "", self.translation, "", "---", ""]
         koerper = (self.to_dialog(with_timestamps=True) if self.hat_sprecher
                    else self.to_text(with_timestamps=True))
         return "\n".join(head) + "\n" + koerper + "\n"
@@ -1553,7 +1621,8 @@ def _pick_backend(backend: str) -> str:
 # DIE EINZELNEN BACKENDS
 # ══════════════════════════════════════════════════════════════
 def _run_faster_whisper(
-    audio: Path, model: str, language: str | None, total: float | None, progress: ProgressFn
+    audio: Path, model: str, language: str | None, total: float | None,
+    progress: ProgressFn, task: str = "transcribe",
 ) -> tuple[list[Segment], str | None]:
     from faster_whisper import WhisperModel
 
@@ -1588,9 +1657,13 @@ def _run_faster_whisper(
     whisper_model = _MODEL_CACHE[key]
 
     progress(0.0, "🧠 Spracherkennung läuft …")
+    if task == "translate":
+        progress(None, "🌍 Wird beim Erkennen direkt ins Englische übersetzt.")
+
     segment_iter, info = whisper_model.transcribe(
         str(audio),
         language=language,
+        task=task,
         beam_size=5,
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 500},
@@ -1606,7 +1679,8 @@ def _run_faster_whisper(
 
 
 def _run_openai_whisper(
-    audio: Path, model: str, language: str | None, total: float | None, progress: ProgressFn
+    audio: Path, model: str, language: str | None, total: float | None,
+    progress: ProgressFn, task: str = "transcribe",
 ) -> tuple[list[Segment], str | None]:
     import whisper
 
@@ -1617,7 +1691,7 @@ def _run_openai_whisper(
     whisper_model = _MODEL_CACHE[key]
 
     progress(0.0, "🧠 Spracherkennung läuft (das Original-Whisper meldet sich erst am Ende) …")
-    result = whisper_model.transcribe(str(audio), language=language, verbose=False)
+    result = whisper_model.transcribe(str(audio), language=language, task=task, verbose=False)
     segments = [
         Segment(float(s["start"]), float(s["end"]), str(s["text"]).strip())
         for s in result.get("segments", [])
@@ -1627,7 +1701,8 @@ def _run_openai_whisper(
 
 
 def _run_openai_api(
-    audio: Path, model: str, language: str | None, total: float | None, progress: ProgressFn
+    audio: Path, model: str, language: str | None, total: float | None,
+    progress: ProgressFn, task: str = "transcribe",
 ) -> tuple[list[Segment], str | None]:
     from openai import OpenAI
 
@@ -1645,13 +1720,20 @@ def _run_openai_api(
             f"☁️ Teil {index}/{len(chunks)} wird an OpenAI geschickt …",
         )
         with open(chunk_path, "rb") as handle:
-            response = client.audio.transcriptions.create(
-                model=api_model,
-                file=handle,
-                language=language,
-                response_format="verbose_json",
-                timestamp_granularities=["segment"],
-            )
+            if task == "translate":
+                # Die Cloud hat dafür einen eigenen Endpunkt, und der kennt
+                # weder "language" noch Zeitstempel-Feinheiten.
+                response = client.audio.translations.create(
+                    model=api_model, file=handle, response_format="verbose_json",
+                )
+            else:
+                response = client.audio.transcriptions.create(
+                    model=api_model,
+                    file=handle,
+                    language=language,
+                    response_format="verbose_json",
+                    timestamp_granularities=["segment"],
+                )
         detected = getattr(response, "language", None) or detected
         for seg in getattr(response, "segments", None) or []:
             start = float(seg["start"] if isinstance(seg, dict) else seg.start)
@@ -1688,6 +1770,7 @@ def transcribe(
     origin: str = "",
     duration: float | None = None,
     progress: ProgressFn | None = None,
+    task: str = "transcribe",
 ) -> Transcript:
     """
     Erkennt die Sprache in einer Audiodatei und liefert ein `Transcript`.
@@ -1695,6 +1778,11 @@ def transcribe(
     `offset` wird auf alle Zeitstempel addiert. Wer also ab Minute 12
     eines Videos transkribiert, bekommt trotzdem Zeitstempel, die zum
     Original passen – praktisch zum Zitieren und Wiederfinden.
+
+    `task="translate"` lässt Whisper gleich beim Erkennen ins Englische
+    übersetzen – kostenlos und offline, aber ausschließlich nach
+    Englisch. Für jede andere Zielsprache ist das Modul uebersetzung.py
+    zuständig.
     """
     audio_path = Path(audio_path)
     if not audio_path.exists():
@@ -1704,7 +1792,9 @@ def transcribe(
     chosen = _pick_backend(backend)
 
     try:
-        segments, detected = _RUNNERS[chosen](audio_path, model, language, duration, report)
+        segments, detected = _RUNNERS[chosen](
+            audio_path, model, language, duration, report, task
+        )
     except TranscriptionError:
         raise
     except ImportError as exc:
@@ -2050,6 +2140,393 @@ def zusammenfassen(
     )
     melden(1.0, "📝 Zusammenfassung fertig.")
     return schluss
+
+
+
+# ══════════════════════════════════════════════════════════════════════
+# aus uebersetzung.py
+# ══════════════════════════════════════════════════════════════════════
+
+"""
+╔══════════════════════════════════════════════════════════════╗
+║  ÜBERSETZUNG – Fremdsprachen lesbar machen                   ║
+╚══════════════════════════════════════════════════════════════╝
+
+Ein englisches Video soll deutschen Text ergeben. Oder umgekehrt.
+
+Drei Wege, absteigend nach Bequemlichkeit:
+
+  ⚡ Whisper selbst  – kann beim Erkennen direkt ins Englische
+                       übersetzen. Kostenlos, offline, kein Zusatzpaket.
+                       Aber: nur nach Englisch, in keine andere Sprache.
+                       (Steckt in transcribe.py, nicht hier.)
+
+  🌍 Argos Translate – übersetzt offline in jede Richtung, kostenlos,
+                       kein Konto. Die Sprachpakete lädt es beim ersten
+                       Mal selbst herunter (~100 MB je Sprachpaar).
+
+  🧠 Sprachmodell    – die beste Qualität, besonders bei Fachbegriffen
+                       und Redewendungen. Kostet pro Anfrage und
+                       schickt den Text aus dem Haus.
+
+Ohne all das bleibt das Transkript einfach in seiner Originalsprache –
+kaputt geht nichts.
+"""
+
+
+import os
+from typing import Callable
+
+__all__ = [
+    "SPRACHEN",
+    "UebersetzungError",
+    "verfuegbare_uebersetzer",
+    "uebersetzung_status",
+    "uebersetzen",
+    "sprachkuerzel",
+    "sprachname",
+    "absatz_haeppchen",
+]
+
+ProgressFn = Callable[[float | None, str], None]
+
+# Ab hier stückweise. Eigener Name, weil die Zusammenfassung ihre eigene
+# Grenze hat – in einer Einzeldatei würden sich gleiche Namen beißen.
+MAX_ZEICHEN_UEBERSETZUNG = 8_000
+
+ANTHROPIC_MODELL = "claude-opus-5"
+OPENAI_MODELL = "gpt-4o-mini"
+
+SPRACHEN: dict[str, str] = {
+    "Deutsch": "de",
+    "Englisch": "en",
+    "Französisch": "fr",
+    "Spanisch": "es",
+    "Italienisch": "it",
+    "Niederländisch": "nl",
+    "Polnisch": "pl",
+    "Portugiesisch": "pt",
+    "Russisch": "ru",
+    "Türkisch": "tr",
+    "Arabisch": "ar",
+    "Chinesisch": "zh",
+    "Japanisch": "ja",
+}
+
+
+class UebersetzungError(RuntimeError):
+    """Die Übersetzung konnte nicht erstellt werden."""
+
+
+def sprachkuerzel(sprache: str | None) -> str | None:
+    """
+    Macht aus "Englisch" das Kürzel "en".
+
+    Kürzel werden unverändert durchgelassen, damit beides geht –
+    "Deutsch" aus der Oberfläche und "de" von der Kommandozeile.
+    """
+    if not sprache:
+        return None
+    sprache = str(sprache).strip()
+    if sprache in SPRACHEN:
+        return SPRACHEN[sprache]
+    kurz = sprache.lower()
+    if kurz in SPRACHEN.values():
+        return kurz
+    # Auch "englisch" klein geschrieben soll gehen.
+    for name, kuerzel in SPRACHEN.items():
+        if name.lower() == kurz:
+            return kuerzel
+    raise UebersetzungError(
+        f"Unbekannte Sprache '{sprache}'. Möglich: {', '.join(SPRACHEN)}"
+    )
+
+
+def sprachname(kuerzel: str) -> str:
+    """Rückweg fürs Anzeigen: "en" → "Englisch"."""
+    for name, kurz in SPRACHEN.items():
+        if kurz == kuerzel:
+            return name
+    return kuerzel
+
+
+# ══════════════════════════════════════════════════════════════
+# WELCHE DIENSTE STEHEN BEREIT?
+# ══════════════════════════════════════════════════════════════
+def _paket_da(name: str) -> bool:
+    import importlib.util
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError, ModuleNotFoundError):
+        return False
+
+
+def verfuegbare_uebersetzer() -> list[str]:
+    """
+    Nutzbare Übersetzer – bester zuerst.
+
+    Argos steht vorn, weil es nichts kostet und den Text nicht aus dem
+    Haus schickt. Ein Sprachmodell liefert schöneres Deutsch, aber dafür
+    muss man bezahlen und die Aufnahme verlässt den Rechner.
+    """
+    dienste = []
+    if _paket_da("argostranslate"):
+        dienste.append("argos")
+    if _paket_da("anthropic") and os.getenv("ANTHROPIC_API_KEY"):
+        dienste.append("anthropic")
+    if _paket_da("openai") and os.getenv("OPENAI_API_KEY"):
+        dienste.append("openai")
+    return dienste
+
+
+def uebersetzung_status() -> str:
+    dienste = verfuegbare_uebersetzer()
+    if dienste:
+        return "✅ Übersetzung: " + " · ".join(dienste)
+    return ("⚠️ Übersetzung: nicht eingerichtet (optional) – "
+            "ins Englische geht es auch ohne, direkt beim Erkennen")
+
+
+def _uebersetzer_waehlen(dienst: str) -> str:
+    verfuegbar = verfuegbare_uebersetzer()
+    if dienst and dienst != "auto":
+        if dienst not in verfuegbar:
+            raise UebersetzungError(
+                f"Der Übersetzer '{dienst}' steht nicht zur Verfügung.\n"
+                f"Nutzbar wäre: {', '.join(verfuegbar) or 'nichts'}"
+            )
+        return dienst
+    if not verfuegbar:
+        raise UebersetzungError(
+            "Für die Übersetzung fehlt noch ein Übersetzer.\n\n"
+            "Kostenlos und offline (empfohlen):\n"
+            "    pip install argostranslate\n\n"
+            "Oder mit Sprachmodell (bessere Qualität, kostet pro Anfrage):\n"
+            "    pip install anthropic     und ANTHROPIC_API_KEY in die .env\n\n"
+            "Hinweis: Ins Englische übersetzt Whisper auch ohne all das –\n"
+            "dafür in den Einstellungen 'Übersetzen nach: Englisch' wählen."
+        )
+    return verfuegbar[0]
+
+
+# ══════════════════════════════════════════════════════════════
+# TEXT ZERLEGEN – ohne Netz, deshalb gut testbar
+# ══════════════════════════════════════════════════════════════
+def absatz_haeppchen(text: str, max_zeichen: int = MAX_ZEICHEN_UEBERSETZUNG) -> list[str]:
+    """
+    Zerlegt langen Text an Absatz- und Satzgrenzen.
+
+    Übersetzer arbeiten satzweise; mitten im Wort zu trennen ergäbe
+    Kauderwelsch. Absätze bleiben möglichst zusammen, damit der
+    Zusammenhang erhalten bleibt.
+    """
+    import re
+
+    text = (text or "").strip()
+    if not text:
+        return []
+    if len(text) <= max_zeichen:
+        return [text]
+
+    stuecke: list[str] = []
+    aktuell = ""
+    for absatz in text.split("\n"):
+        if len(absatz) > max_zeichen:
+            # Zu langer Absatz: an Satzenden weiter zerlegen.
+            for satz in re.split(r"(?<=[.!?…])\s+", absatz):
+                while len(satz) > max_zeichen:
+                    if aktuell:
+                        stuecke.append(aktuell.strip())
+                        aktuell = ""
+                    stuecke.append(satz[:max_zeichen])
+                    satz = satz[max_zeichen:]
+                if len(aktuell) + len(satz) + 1 > max_zeichen and aktuell:
+                    stuecke.append(aktuell.strip())
+                    aktuell = satz
+                else:
+                    aktuell = f"{aktuell} {satz}".strip()
+            continue
+
+        if len(aktuell) + len(absatz) + 1 > max_zeichen and aktuell:
+            stuecke.append(aktuell.strip())
+            aktuell = absatz
+        else:
+            aktuell = f"{aktuell}\n{absatz}".strip() if aktuell else absatz
+
+    if aktuell.strip():
+        stuecke.append(aktuell.strip())
+    return [s for s in stuecke if s.strip()]
+
+
+# ══════════════════════════════════════════════════════════════
+# DIE ÜBERSETZER
+# ══════════════════════════════════════════════════════════════
+def _argos_paket_sichern(von: str, nach: str, melden: ProgressFn) -> None:
+    """Lädt das Sprachpaket, falls es noch fehlt."""
+    import argostranslate.package
+    import argostranslate.translate
+
+    vorhanden = {
+        (s.code, z.code)
+        for s in argostranslate.translate.get_installed_languages()
+        for z in s.translations_from
+    } if hasattr(argostranslate.translate, "get_installed_languages") else set()
+    if (von, nach) in vorhanden:
+        return
+
+    melden(None, f"🌍 Sprachpaket {von} → {nach} wird geholt (~100 MB, nur dieses eine Mal) …")
+    try:
+        argostranslate.package.update_package_index()
+        pakete = argostranslate.package.get_available_packages()
+        passend = next(
+            (p for p in pakete if p.from_code == von and p.to_code == nach), None
+        )
+        if passend is None:
+            raise UebersetzungError(
+                f"Für {sprachname(von)} → {sprachname(nach)} gibt es bei Argos kein "
+                "Sprachpaket.\nMit einem Sprachmodell ginge es trotzdem – siehe Einstellungen."
+            )
+        argostranslate.package.install_from_path(passend.download())
+    except UebersetzungError:
+        raise
+    except Exception as exc:
+        raise UebersetzungError(
+            f"Das Sprachpaket konnte nicht geladen werden: {exc}\n"
+            "Meist fehlt schlicht die Internetverbindung."
+        ) from exc
+
+
+def _uebersetze_argos(text: str, von: str, nach: str, melden: ProgressFn) -> str:
+    import argostranslate.translate
+
+    _argos_paket_sichern(von, nach, melden)
+    melden(None, f"🌍 Übersetzung {sprachname(von)} → {sprachname(nach)} läuft (offline) …")
+    try:
+        return argostranslate.translate.translate(text, von, nach).strip()
+    except Exception as exc:
+        raise UebersetzungError(f"Argos konnte nicht übersetzen: {exc}") from exc
+
+
+def _anweisung(nach: str) -> str:
+    return (
+        f"Übersetze den folgenden Text nach {sprachname(nach)}.\n\n"
+        "Der Text stammt aus einer automatischen Spracherkennung: Er enthält "
+        "Hörfehler, abgebrochene Sätze und fehlende Satzzeichen. Übersetze, "
+        "was dasteht – erfinde nichts dazu und lass nichts weg. Ist eine "
+        "Stelle unverständlich, übernimm sie unverändert statt zu raten.\n\n"
+        "Gib ausschließlich die Übersetzung zurück, ohne Vorrede und ohne "
+        "Anmerkungen. Zeilenumbrüche und Sprecher-Angaben wie 'Sprecher 1:' "
+        "bleiben erhalten."
+    )
+
+
+def _uebersetze_anthropic(text: str, von: str, nach: str, melden: ProgressFn) -> str:
+    import anthropic
+
+    client = anthropic.Anthropic()
+    argumente = dict(
+        model=ANTHROPIC_MODELL,
+        max_tokens=8192,
+        system=_anweisung(nach),
+        messages=[{"role": "user", "content": text}],
+        # Übersetzen ist Handwerk, kein Knobeln – niedriger Aufwand genügt.
+        output_config={"effort": "low"},
+    )
+    try:
+        antwort = client.messages.create(**argumente)
+    except (TypeError, anthropic.BadRequestError):
+        argumente.pop("output_config", None)
+        antwort = client.messages.create(**argumente)
+    except anthropic.AuthenticationError as exc:
+        raise UebersetzungError("Der ANTHROPIC_API_KEY wird nicht akzeptiert.") from exc
+    except anthropic.APIConnectionError as exc:
+        raise UebersetzungError("Keine Verbindung zu Anthropic.") from exc
+    except anthropic.APIStatusError as exc:
+        raise UebersetzungError(f"Anthropic meldet einen Fehler: {exc}") from exc
+
+    if getattr(antwort, "stop_reason", None) == "refusal":
+        raise UebersetzungError(
+            "Das Modell hat die Übersetzung abgelehnt. Das Transkript selbst "
+            "bleibt davon unberührt."
+        )
+    return "\n".join(
+        block.text for block in antwort.content if getattr(block, "type", "") == "text"
+    ).strip()
+
+
+def _uebersetze_openai(text: str, von: str, nach: str, melden: ProgressFn) -> str:
+    from openai import OpenAI
+
+    client = OpenAI()
+    try:
+        antwort = client.chat.completions.create(
+            model=OPENAI_MODELL,
+            max_tokens=8192,
+            messages=[
+                {"role": "system", "content": _anweisung(nach)},
+                {"role": "user", "content": text},
+            ],
+        )
+    except Exception as exc:
+        raise UebersetzungError(f"OpenAI meldet einen Fehler: {exc}") from exc
+    return (antwort.choices[0].message.content or "").strip()
+
+
+_UEBERSETZER = {
+    "argos": _uebersetze_argos,
+    "anthropic": _uebersetze_anthropic,
+    "openai": _uebersetze_openai,
+}
+
+
+# ══════════════════════════════════════════════════════════════
+# HAUPT-EINSTIEG
+# ══════════════════════════════════════════════════════════════
+def uebersetzen(
+    text: str,
+    nach: str = "de",
+    von: str | None = None,
+    dienst: str = "auto",
+    progress: ProgressFn | None = None,
+) -> str:
+    """
+    Übersetzt einen Text.
+
+    `von` darf None sein, wenn der Dienst die Sprache selbst erkennt;
+    Argos braucht die Angabe und nimmt dann Englisch an, weil das der
+    häufigste Fall ist.
+    """
+    melden: ProgressFn = progress or (lambda anteil, meldung: None)
+
+    text = (text or "").strip()
+    if not text:
+        raise UebersetzungError("Es gibt nichts zu übersetzen – der Text ist leer.")
+
+    ziel = sprachkuerzel(nach)
+    quelle = sprachkuerzel(von) if von else None
+    if quelle == ziel:
+        melden(1.0, f"🌍 Der Text ist schon auf {sprachname(ziel)} – nichts zu tun.")
+        return text
+
+    gewaehlt = _uebersetzer_waehlen(dienst)
+    if gewaehlt == "argos" and not quelle:
+        # Argos muss wissen, woher. Englisch ist die häufigste Quelle.
+        quelle = "en" if ziel != "en" else "de"
+        melden(None, f"🌍 Quellsprache unbekannt – nehme {sprachname(quelle)} an.")
+
+    uebersetzer = _UEBERSETZER[gewaehlt]
+    stuecke = absatz_haeppchen(text)
+
+    if len(stuecke) == 1:
+        return uebersetzer(stuecke[0], quelle, ziel, melden)
+
+    melden(None, f"🌍 Text ist lang – wird in {len(stuecke)} Teilen übersetzt ({gewaehlt}) …")
+    teile = []
+    for nummer, stueck in enumerate(stuecke, start=1):
+        melden((nummer - 1) / len(stuecke), f"🌍 Teil {nummer}/{len(stuecke)} …")
+        teile.append(uebersetzer(stueck, quelle, ziel, melden))
+    melden(1.0, "🌍 Übersetzung fertig.")
+    return "\n\n".join(teile)
 
 
 
@@ -2434,6 +2911,7 @@ class Job:
     cookies_from_browser: str | None = None
     sprecher: bool = False            # wer sagt was? (braucht pyannote.audio)
     sprecherzahl: int | None = None   # bekannte Anzahl hilft der Erkennung
+    uebersetzen_nach: str | None = None  # "en", "de", … oder None = nicht übersetzen
 
 
 def safe_filename(name: str, fallback: str = "transkript") -> str:
@@ -2466,6 +2944,16 @@ def run_job(job: Job, progress: ProgressFn | None = None) -> Transcript:
         bis = format_hms((start or 0) + duration) if duration else "Ende"
         report(None, f"✂️ Ausschnitt: {von} → {bis}")
 
+    # Ins Englische kann Whisper selbst übersetzen – kostenlos, offline und
+    # mit erhaltenen Zeitstempeln. Nur für andere Zielsprachen braucht es
+    # hinterher einen echten Übersetzer.
+    ziel = None
+    if job.uebersetzen_nach:
+        ziel = sprachkuerzel(job.uebersetzen_nach)
+    direkt_englisch = ziel == "en"
+    if direkt_englisch:
+        report(None, "🌍 Zielsprache Englisch – das erledigt Whisper gleich mit.")
+
     report(None, "📥 Quelle wird vorbereitet …")
     prepared = prepare_source(
         source,
@@ -2488,6 +2976,7 @@ def run_job(job: Job, progress: ProgressFn | None = None) -> Transcript:
             origin=prepared.origin,
             duration=prepared.duration,
             progress=report,
+            task="translate" if direkt_englisch else "transcribe",
         )
 
         if job.sprecher:
@@ -2495,12 +2984,40 @@ def run_job(job: Job, progress: ProgressFn | None = None) -> Transcript:
     finally:
         prepared.cleanup()
 
+    if ziel and not direkt_englisch:
+        _uebersetzen_anhaengen(result, ziel, report)
+    elif direkt_englisch:
+        result.translation_language = "Englisch"
+
     words = len(result.text.split())
     schluss = f"✅ Fertig: {len(result.segments)} Abschnitte · {words} Wörter"
     if result.hat_sprecher:
         schluss += f" · {len({s.speaker for s in result.segments if s.speaker})} Sprecher"
+    if result.translation_language:
+        schluss += f" · übersetzt nach {result.translation_language}"
     report(1.0, schluss)
     return result
+
+
+def _uebersetzen_anhaengen(result: Transcript, ziel: str, report: ProgressFn) -> None:
+    """
+    Übersetzt ein fertiges Transkript nachträglich.
+
+    Scheitert das, bleibt das Transkript stehen – die Arbeit der
+    Spracherkennung ist zu teuer, um sie an einer fehlenden
+    Übersetzung wegzuwerfen.
+    """
+
+    try:
+        result.translation = uebersetzen(
+            result.to_text(with_timestamps=False),
+            nach=ziel,
+            von=result.language,
+            progress=report,
+        )
+        result.translation_language = sprachname(ziel)
+    except UebersetzungError as exc:
+        report(None, f"⚠️ Übersetzung übersprungen: {str(exc).splitlines()[0]}")
 
 
 def _sprecher_zuordnen(job: Job, prepared, result: Transcript, report: ProgressFn) -> None:
@@ -2869,6 +3386,7 @@ def load_settings() -> dict:
         "sprecher": False,
         "sprecherzahl": "",
         "zf_art": "stichpunkte",
+        "uebersetzen_nach": "Nicht übersetzen",
     }
     try:
         if SETTINGS_FILE.exists():
@@ -2909,6 +3427,7 @@ class VoiceApp(_Fenster):
         self.transcript: Transcript | None = None
         self.messages: queue.Queue = queue.Queue()
         self.zf_laeuft = False
+        self.trans_laeuft = False
         self.schlange = Warteschlange(ereignis=self._schlangen_ereignis)
 
         self.title("🎙️ Voice2Text – Video & Sprache zu Text")
@@ -2964,6 +3483,7 @@ class VoiceApp(_Fenster):
         self.tab_queue = self.tabs.add("📚 Warteschlange")
         self.tab_text = self.tabs.add("📝 Transkript")
         self.tab_sum = self.tabs.add("🧾 Zusammenfassung")
+        self.tab_trans = self.tabs.add("🌍 Übersetzung")
         self.tab_tts = self.tabs.add("🔊 Vorlesen")
         self.tab_cfg = self.tabs.add("⚙️ Einstellungen")
 
@@ -2972,6 +3492,7 @@ class VoiceApp(_Fenster):
         self._build_tab_queue()
         self._build_tab_text()
         self._build_tab_sum()
+        self._build_tab_trans()
         self._build_tab_tts()
         self._build_tab_settings()
 
@@ -3238,6 +3759,86 @@ class VoiceApp(_Fenster):
         self.clipboard_append(text)
         self._log("📋 Zusammenfassung kopiert.")
 
+    # ---------- 🌍 ÜBERSETZUNG ----------
+    def _build_tab_trans(self):
+        frame = self.tab_trans
+        ctk.CTkLabel(
+            frame, text="Fremdsprachen lesbar machen",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).pack(anchor="w", padx=18, pady=(16, 2))
+        ctk.CTkLabel(
+            frame,
+            text=("Nach Englisch übersetzt Whisper direkt beim Erkennen – kostenlos, offline,\n"
+                  "mit erhaltenen Zeitstempeln. Dafür in den Einstellungen die Zielsprache\n"
+                  "auf Englisch stellen, bevor das Video läuft.\n\n"
+                  "In jede andere Sprache übersetzt ein Übersetzer hinterher. Kostenlos und\n"
+                  "offline geht das mit:   pip install argostranslate"),
+            text_color=CLR_GREY, justify="left",
+        ).pack(anchor="w", padx=18, pady=(0, 12))
+
+        leiste = ctk.CTkFrame(frame, fg_color="transparent")
+        leiste.pack(fill="x", padx=18, pady=(0, 10))
+        ctk.CTkLabel(leiste, text="Nach", text_color=CLR_GREY).pack(side="left")
+        self.trans_ziel_menu = ctk.CTkOptionMenu(leiste, values=list(SPRACHEN), width=180)
+        self.trans_ziel_menu.set("Deutsch")
+        self.trans_ziel_menu.pack(side="left", padx=(8, 12))
+
+        ctk.CTkButton(leiste, text="📋 Kopieren", width=120,
+                      command=self._copy_translation).pack(side="right", padx=(8, 0))
+        ctk.CTkButton(
+            leiste, text="🌍 Jetzt übersetzen", width=180,
+            fg_color=CLR_BLUE, hover_color="#3d87bd",
+            command=self._uebersetzen_klick,
+        ).pack(side="right")
+
+        self.trans_box = ctk.CTkTextbox(
+            frame, fg_color=CLR_BG, font=ctk.CTkFont(size=14), wrap="word")
+        self.trans_box.pack(fill="both", expand=True, padx=18, pady=(4, 14))
+
+    def _uebersetzen_klick(self):
+        if not self._require_transcript():
+            return
+        if self.trans_laeuft:
+            self._log("🌍 Läuft bereits.")
+            return
+
+        text = self.transcript.to_text(with_timestamps=False)
+        ziel = self.trans_ziel_menu.get()
+        quelle = self.transcript.language
+        self.trans_laeuft = True
+        self._log(f"🌍 Übersetzung nach {ziel} wird erstellt …")
+
+        def arbeit():
+            try:
+                ergebnis = uebersetzen(
+                    text, nach=ziel, von=quelle,
+                    progress=lambda anteil, meldung: self.messages.put(("log", meldung)),
+                )
+                self.messages.put(("uebersetzung", (ziel, ergebnis)))
+            except Exception as exc:
+                self.messages.put(("uebersetzung_fehler", str(exc)))
+
+        threading.Thread(target=arbeit, daemon=True).start()
+
+    def _zeige_uebersetzung(self, ziel: str, text: str):
+        self.trans_laeuft = False
+        if self.transcript:
+            self.transcript.translation = text
+            self.transcript.translation_language = ziel
+        self.trans_box.delete("1.0", "end")
+        self.trans_box.insert("1.0", text)
+        self.tabs.set("🌍 Übersetzung")
+        self._log(f"🌍 Übersetzung nach {ziel} fertig.")
+
+    def _copy_translation(self):
+        text = self.trans_box.get("1.0", "end").strip()
+        if not text:
+            messagebox.showinfo("Noch nichts da", "Es gibt noch keine Übersetzung.")
+            return
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self._log("📋 Übersetzung kopiert.")
+
     # ---------- 🔊 VORLESEN ----------
     def _build_tab_tts(self):
         frame = self.tab_tts
@@ -3328,6 +3929,14 @@ class VoiceApp(_Fenster):
         ctk.CTkCheckBox(wrap, text="Fertige Transkripte automatisch dort speichern (txt · srt · vtt · md)",
                         variable=self.autosave_var, fg_color=CLR_ACCENT,
                         hover_color=CLR_ACCENT).pack(anchor="w", padx=10, pady=(10, 0))
+
+        # Übersetzung
+        box = section("🌍 Übersetzen nach")
+        self.ziel_menu = ctk.CTkOptionMenu(box, values=["Nicht übersetzen"] + list(SPRACHEN), width=200)
+        self.ziel_menu.set(self.settings.get("uebersetzen_nach", "Nicht übersetzen"))
+        self.ziel_menu.pack(side="left", padx=14, pady=14)
+        ctk.CTkLabel(box, text="Englisch erledigt Whisper gleich mit – kostenlos und offline.",
+                     text_color=CLR_GREY).pack(side="left")
 
         # Sprecher
         box = section("👥 Sprecher-Erkennung (optional)")
@@ -3469,6 +4078,7 @@ class VoiceApp(_Fenster):
             "sprecher": bool(self.sprecher_var.get()),
             "sprecherzahl": self.sprecherzahl_var.get(),
             "zf_art": self.zf_art_menu.get(),
+            "uebersetzen_nach": self.ziel_menu.get(),
         }
 
     def _save_settings_clicked(self):
@@ -3478,7 +4088,8 @@ class VoiceApp(_Fenster):
 
     def _check_environment(self):
         lines = [ffmpeg_status(), backend_status(), tts_status(),
-                 sprecher_status(), zusammenfassung_status()]
+                 sprecher_status(), zusammenfassung_status(),
+                 uebersetzung_status()]
         try:
             import yt_dlp  # noqa: F401
             yt_dlp_da = True
@@ -3529,6 +4140,8 @@ class VoiceApp(_Fenster):
             cookies_from_browser=self.cookies_var.get() or None,
             sprecher=bool(self.sprecher_var.get()),
             sprecherzahl=self._sprecherzahl(),
+            uebersetzen_nach=(None if self.ziel_menu.get() == "Nicht übersetzen"
+                              else self.ziel_menu.get()),
         )
 
     def _sprecherzahl(self) -> int | None:
@@ -3633,6 +4246,12 @@ class VoiceApp(_Fenster):
                     self.zf_laeuft = False
                     self._log(f"⚠️ Zusammenfassung nicht möglich: {str(wert).splitlines()[0]}")
                     messagebox.showinfo("Zusammenfassung nicht möglich", str(wert))
+                elif art == "uebersetzung":
+                    self._zeige_uebersetzung(*wert)
+                elif art == "uebersetzung_fehler":
+                    self.trans_laeuft = False
+                    self._log(f"⚠️ Übersetzung nicht möglich: {str(wert).splitlines()[0]}")
+                    messagebox.showinfo("Übersetzung nicht möglich", str(wert))
                 elif art == "hinweis":
                     messagebox.showerror("Das hat nicht geklappt", str(wert))
         except queue.Empty:
@@ -3653,6 +4272,9 @@ class VoiceApp(_Fenster):
     def _auftrag_fertig(self, auftrag: Auftrag):
         self.transcript = auftrag.transcript
         self._render_transcript()
+        if auftrag.transcript and auftrag.transcript.translation:
+            self.trans_box.delete("1.0", "end")
+            self.trans_box.insert("1.0", auftrag.transcript.translation)
         if self.schlange.offen == 0:
             self.tabs.set("📝 Transkript")
 
@@ -3936,6 +4558,12 @@ Beispiele:
     # Gespräch mit Sprecher-Erkennung, dazu ein Protokoll
     python -m voice2text besprechung.mp4 --sprecher --zusammenfassung protokoll
 
+    # englisches Video, deutscher Text
+    python -m voice2text vortrag.mp4 --sprache en --uebersetzen Deutsch
+
+    # deutsches Video, englischer Text (kostenlos, offline)
+    python -m voice2text video.mp4 --uebersetzen Englisch
+
     # Text vorlesen lassen
     python -m voice2text --sprich "Hallo Sven, das Transkript ist fertig."
 """
@@ -3979,6 +4607,10 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Wer sagt was? (braucht pyannote.audio + Hugging-Face-Token)")
     erkennung.add_argument("--sprecherzahl", type=int,
                            help="Anzahl der Sprecher, falls bekannt – hilft der Erkennung")
+    erkennung.add_argument("--uebersetzen", "-u", metavar="SPRACHE",
+                           help="Zielsprache, z. B. Englisch oder de. Nach Englisch macht "
+                                "Whisper es kostenlos und offline mit; alles andere braucht "
+                                "argostranslate oder einen API-Schlüssel")
 
     ausgabe = parser.add_argument_group("Ausgabe")
     ausgabe.add_argument("--ausgabe", "-o", help="Zieldatei (.txt · .srt · .vtt · .md)")
@@ -4006,6 +4638,7 @@ def _print_status() -> None:
     print("   " + tts_status())
     print("   " + sprecher_status())
     print("   " + zusammenfassung_status())
+    print("   " + uebersetzung_status())
     try:
         import yt_dlp  # noqa: F401
         print("   ✅ Online-Links: yt-dlp bereit")
@@ -4084,6 +4717,7 @@ def kommandozeile(argv: list[str] | None = None) -> int:
             cookies_from_browser=args.cookies,
             sprecher=args.sprecher,
             sprecherzahl=args.sprecherzahl,
+            uebersetzen_nach=args.uebersetzen,
         )
 
         try:
@@ -4119,6 +4753,10 @@ def kommandozeile(argv: list[str] | None = None) -> int:
             if transcript.summary:
                 print("--- Zusammenfassung ---")
                 print(transcript.summary)
+            if transcript.translation:
+                print(f"--- Übersetzung ({transcript.translation_language}) ---")
+                print(transcript.translation)
+            if transcript.summary or transcript.translation:
                 print("--- Transkript ---")
             print(transcript.to_text(with_timestamps=args.zeitstempel))
 

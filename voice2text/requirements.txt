@@ -27,5 +27,8 @@ tkinterdnd2>=0.3.0          # Dateien ins Fenster ziehen (ohne das Paket
 #                           #   und zugleich Zusammenfassungen
 # anthropic>=0.40.0         # Zusammenfassungen mit Claude (ANTHROPIC_API_KEY)
 # pyannote.audio>=3.1.0     # Sprecher-Erkennung (Hugging-Face-Konto + Token)
+# argostranslate>=1.9.0     # Übersetzen in jede Sprache, offline und kostenlos
+#                           #   (ins Englische geht es auch ohne: das macht
+#                           #    Whisper direkt beim Erkennen mit)
 # gTTS>=2.5.0               # natürlicher klingende MP3-Sprachausgabe (online)
 # openai-whisper>=20231117  # das Original-Whisper als Alternative

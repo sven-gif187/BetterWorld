@@ -40,6 +40,7 @@ __all__ = [
     "split_audio",
     "looks_like_url",
     "prepare_source",
+    "_yt_fehler_deuten",
     "download_online_audio",
     "AUDIO_SUFFIXES",
     "VIDEO_SUFFIXES",
@@ -367,6 +368,65 @@ def _download_with_binary(
     return path, path.stem, trimmed
 
 
+def _yt_fehler_deuten(meldung: str) -> str:
+    """
+    Übersetzt yt-dlp-Fehler in eine Anweisung, mit der man etwas anfangen kann.
+
+    Die Meldungen sind englisch, technisch und nennen die Lösung nicht.
+    YouTube ändert seine Abwehr zudem regelmäßig, weshalb fast alle
+    Fehler auf zwei Ursachen hinauslaufen: veraltetes yt-dlp oder
+    fehlende Anmeldung.
+    """
+    tief = meldung.lower()
+
+    if "sign in" in tief or "not a bot" in tief or "cookies" in tief:
+        return (
+            "YouTube will eine Anmeldung sehen.\n\n"
+            "Das passiert bei Videos mit Altersfreigabe – und seit einiger Zeit\n"
+            "auch einfach so, wenn YouTube den Zugriff für einen Roboter hält.\n\n"
+            "Lösung: In den Einstellungen unter '🍪 Browser-Cookies' deinen\n"
+            "Browser auswählen (chrome, firefox, edge …). Die App benutzt dann\n"
+            "deine normale YouTube-Anmeldung. Wichtig: Der Browser muss dabei\n"
+            "geschlossen sein, sonst gibt er die Cookies nicht her."
+        )
+
+    if ("unable to extract" in tief or "player response" in tief
+            or "nsig" in tief or "signature" in tief):
+        return (
+            "yt-dlp kommt mit dieser YouTube-Fassung nicht zurecht.\n\n"
+            "YouTube ändert seinen Aufbau ständig; yt-dlp zieht meist innerhalb\n"
+            "weniger Tage nach. Fast immer hilft eine neuere Fassung:\n\n"
+            "    pip install --upgrade yt-dlp\n\n"
+            "Danach die App neu starten."
+        )
+
+    if "video unavailable" in tief or "private" in tief or "removed" in tief:
+        return (
+            "Das Video ist nicht abrufbar – privat, gelöscht oder in\n"
+            "Deutschland gesperrt. Ein anderes Video probieren."
+        )
+
+    if "http error 403" in tief or "forbidden" in tief:
+        return (
+            "YouTube hat den Zugriff abgelehnt (403).\n\n"
+            "Meist hilft ein Update:  pip install --upgrade yt-dlp\n"
+            "Sonst dasselbe wie oben: Browser-Cookies in den Einstellungen."
+        )
+
+    if "unsupported url" in tief or "no video" in tief:
+        return (
+            "Mit diesem Link kann yt-dlp nichts anfangen.\n\n"
+            "Er sollte direkt auf ein Video zeigen, nicht auf eine Playlist,\n"
+            "einen Kanal oder eine Suchseite. Bei YouTube sieht ein richtiger\n"
+            "Link so aus:  https://www.youtube.com/watch?v=…"
+        )
+
+    if "timed out" in tief or "connection" in tief or "network" in tief:
+        return "Die Verbindung ist abgebrochen. Internet prüfen und nochmal versuchen."
+
+    return ""
+
+
 def download_online_audio(
     url: str,
     workdir: Path,
@@ -389,12 +449,15 @@ def download_online_audio(
         raise
     except Exception as exc:                       # yt-dlp wirft eigene Fehlertypen
         message = str(exc).strip() or exc.__class__.__name__
-        if "Sign in" in message or "cookies" in message.lower():
-            message += (
-                "\n\nTipp: Bei Videos mit Altersfreigabe oder Login hilft es, in den "
-                "Einstellungen den Browser für Cookies zu hinterlegen."
-            )
-        raise MediaError(f"Der Link konnte nicht geladen werden:\n{message}") from exc
+        rat = _yt_fehler_deuten(message)
+        if rat:
+            raise MediaError(f"{rat}\n\n(Originalmeldung: {message[:300]})") from exc
+        raise MediaError(
+            f"Der Link konnte nicht geladen werden:\n{message}\n\n"
+            "Zwei Dinge, die fast immer helfen:\n"
+            "  1. pip install --upgrade yt-dlp\n"
+            "  2. In den Einstellungen die Browser-Cookies hinterlegen"
+        ) from exc
 
 
 # ══════════════════════════════════════════════════════════════

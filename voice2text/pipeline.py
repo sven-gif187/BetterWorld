@@ -43,6 +43,7 @@ class Job:
     cookies_from_browser: str | None = None
     sprecher: bool = False            # wer sagt was? (braucht pyannote.audio)
     sprecherzahl: int | None = None   # bekannte Anzahl hilft der Erkennung
+    uebersetzen_nach: str | None = None  # "en", "de", … oder None = nicht übersetzen
 
 
 def safe_filename(name: str, fallback: str = "transkript") -> str:
@@ -75,6 +76,17 @@ def run_job(job: Job, progress: ProgressFn | None = None) -> Transcript:
         bis = format_hms((start or 0) + duration) if duration else "Ende"
         report(None, f"✂️ Ausschnitt: {von} → {bis}")
 
+    # Ins Englische kann Whisper selbst übersetzen – kostenlos, offline und
+    # mit erhaltenen Zeitstempeln. Nur für andere Zielsprachen braucht es
+    # hinterher einen echten Übersetzer.
+    ziel = None
+    if job.uebersetzen_nach:
+        from .uebersetzung import sprachkuerzel, sprachname
+        ziel = sprachkuerzel(job.uebersetzen_nach)
+    direkt_englisch = ziel == "en"
+    if direkt_englisch:
+        report(None, "🌍 Zielsprache Englisch – das erledigt Whisper gleich mit.")
+
     report(None, "📥 Quelle wird vorbereitet …")
     prepared = media.prepare_source(
         source,
@@ -97,6 +109,7 @@ def run_job(job: Job, progress: ProgressFn | None = None) -> Transcript:
             origin=prepared.origin,
             duration=prepared.duration,
             progress=report,
+            task="translate" if direkt_englisch else "transcribe",
         )
 
         if job.sprecher:
@@ -104,12 +117,41 @@ def run_job(job: Job, progress: ProgressFn | None = None) -> Transcript:
     finally:
         prepared.cleanup()
 
+    if ziel and not direkt_englisch:
+        _uebersetzen_anhaengen(result, ziel, report)
+    elif direkt_englisch:
+        result.translation_language = "Englisch"
+
     words = len(result.text.split())
     schluss = f"✅ Fertig: {len(result.segments)} Abschnitte · {words} Wörter"
     if result.hat_sprecher:
         schluss += f" · {len({s.speaker for s in result.segments if s.speaker})} Sprecher"
+    if result.translation_language:
+        schluss += f" · übersetzt nach {result.translation_language}"
     report(1.0, schluss)
     return result
+
+
+def _uebersetzen_anhaengen(result: Transcript, ziel: str, report: ProgressFn) -> None:
+    """
+    Übersetzt ein fertiges Transkript nachträglich.
+
+    Scheitert das, bleibt das Transkript stehen – die Arbeit der
+    Spracherkennung ist zu teuer, um sie an einer fehlenden
+    Übersetzung wegzuwerfen.
+    """
+    from .uebersetzung import UebersetzungError, sprachname, uebersetzen
+
+    try:
+        result.translation = uebersetzen(
+            result.to_text(with_timestamps=False),
+            nach=ziel,
+            von=result.language,
+            progress=report,
+        )
+        result.translation_language = sprachname(ziel)
+    except UebersetzungError as exc:
+        report(None, f"⚠️ Übersetzung übersprungen: {str(exc).splitlines()[0]}")
 
 
 def _sprecher_zuordnen(job: Job, prepared, result: Transcript, report: ProgressFn) -> None:

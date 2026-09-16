@@ -21,6 +21,7 @@
 | 💾 **4 Formate** | `.txt` · `.srt` (Untertitel) · `.vtt` (Web) · `.md` (Archiv) |
 | 🖱️ **Drag & Drop** | Videos einfach ins Fenster ziehen – mehrere landen in der Warteschlange |
 | 📚 **Warteschlange** | Mehrere Videos am Stück, einer nach dem anderen, Fehler stoppen den Rest nicht |
+| 🌍 **Übersetzung** | Englisches Video → deutscher Text und umgekehrt |
 | 👥 **Sprecher-Erkennung** | Wer sagt was – aus Wortsalat wird ein lesbarer Dialog *(optional)* |
 | 🧾 **Zusammenfassung** | Stichpunkte, Protokoll oder Aufgabenliste statt einer Stunde Text *(optional)* |
 | 🔊 **Text → Sprache** | Transkript oder eigenen Text vorlesen lassen und als Audio speichern |
@@ -102,7 +103,7 @@ python -m voice2text
 
 **Windows:** `voice2text\START_WINDOWS.bat` doppelklicken.
 
-Sieben Reiter:
+Acht Reiter:
 
 | Reiter | Wofür |
 |---|---|
@@ -111,6 +112,7 @@ Sieben Reiter:
 | 📚 **Warteschlange** | Mehrere Videos am Stück – Fortschritt, Fehler, fertige Transkripte auf einen Blick |
 | 📝 **Transkript** | Ergebnis lesen, kopieren, speichern, vorlesen lassen |
 | 🧾 **Zusammenfassung** | Stichpunkte, Protokoll, Aufgabenliste *(braucht API-Schlüssel)* |
+| 🌍 **Übersetzung** | Transkript in eine andere Sprache |
 | 🔊 **Vorlesen** | Beliebigen Text zu Sprache – Stimme und Tempo einstellbar |
 | ⚙️ **Einstellungen** | Modell, Sprache, Backend, Sprecher, Ausgabeordner, Systemstatus |
 
@@ -238,6 +240,50 @@ python -m voice2text --status
 
 ---
 
+## 🌍 Übersetzung
+
+Zwei Wege, und der wichtigste kostet nichts.
+
+### Nach Englisch — kostenlos, offline, ohne Zusatzpaket
+
+Whisper kann beim Erkennen direkt übersetzen. Es hört Deutsch und schreibt Englisch,
+in einem Durchgang, **mit erhaltenen Zeitstempeln** — die Untertitel passen also weiter
+zum Video.
+
+Dafür in den Einstellungen *Übersetzen nach: Englisch* wählen, **bevor** das Video läuft.
+Auf der Kommandozeile:
+
+```bash
+python -m voice2text video.mp4 --uebersetzen Englisch
+```
+
+### In jede andere Sprache
+
+Das geht nur nachträglich, aus dem fertigen Transkript. Kostenlos und offline mit:
+
+```bash
+pip install argostranslate
+```
+
+Das Sprachpaket (~100 MB je Sprachpaar) lädt sich beim ersten Mal selbst herunter.
+Ein englisches Video auf Deutsch:
+
+```bash
+python -m voice2text vortrag.mp4 --sprache en --uebersetzen Deutsch
+```
+
+Wer einen API-Schlüssel hat (`ANTHROPIC_API_KEY` oder `OPENAI_API_KEY`), bekommt
+schöneren Text — besonders bei Fachbegriffen und Redewendungen. Kostet dann pro
+Anfrage und der Text verlässt den Rechner.
+
+Im Reiter **🌍 Übersetzung** lässt sich ein bereits fertiges Transkript jederzeit
+nachträglich übersetzen, ohne das Video erneut durchlaufen zu lassen.
+
+**Warum zwei Wege?** Whisper beherrscht ausschließlich die Richtung *→ Englisch*.
+Das ist keine Sparmaßnahme, sondern liegt am Modell selbst.
+
+---
+
 ## 👥 Sprecher-Erkennung *(optional)*
 
 Statt einer Textwurst wird daraus ein Gespräch:
@@ -310,6 +356,8 @@ sonst bereitwillig mit Erfundenem.
 | Sprecher-Erkennung wird übersprungen | Token fehlt oder Nutzungsbedingungen auf huggingface.co nicht bestätigt |
 | Zusammenfassung nicht möglich | Kein `ANTHROPIC_API_KEY` bzw. `OPENAI_API_KEY` in der `.env` |
 | Schlüssel wird nicht gefunden | `python -m voice2text --status` zeigt, welche `.env` gelesen wurde |
+| YouTube-Link geht nicht | `pip install --upgrade yt-dlp`; hilft das nicht, in den Einstellungen die Browser-Cookies hinterlegen (Browser dabei schließen) |
+| Übersetzung nur nach Englisch möglich | Für andere Sprachen `pip install argostranslate` |
 | Erkennung ist ungenau | Sprache fest auf *Deutsch* stellen statt „automatisch“, oder Modell `medium` nehmen |
 | Alles ist zu langsam | Kleineres Modell (`base`) oder mit `--start`/`--dauer` nur den nötigen Ausschnitt |
 
@@ -320,7 +368,7 @@ sonst bereitwillig mit Erfundenem.
 ```
 voice2text/
 ├── __main__.py     Einstieg:  ohne Argumente → Fenster, mit Argumenten → Kommandozeile
-├── app.py          Oberfläche (customtkinter, 7 Reiter, Drag & Drop)
+├── app.py          Oberfläche (customtkinter, 8 Reiter, Drag & Drop)
 ├── cli.py          Kommandozeile
 ├── pipeline.py     Der Ablauf: Quelle → Ausschnitt → Ton → Text
 ├── media.py        ffmpeg & yt-dlp: Tonspur holen, Online-Links anzapfen
@@ -331,8 +379,9 @@ voice2text/
 ├── warteschlange.py Mehrere Aufträge nacheinander (ohne GUI, deshalb testbar)
 ├── sprecher.py     Sprecher-Erkennung und Zuordnung zu den Sätzen
 ├── zusammenfassung.py Transkript → Stichpunkte, Protokoll, Aufgabenliste
+├── uebersetzung.py Übersetzen (Argos offline, oder Sprachmodell)
 ├── einrichten.py   Einrichtungs-Assistent mit Selbsttest
-└── tests/          137 Tests (8 davon mit echtem ffmpeg, sonst übersprungen)
+└── tests/          218 Tests (8 davon mit echtem ffmpeg, sonst übersprungen)
 ```
 
 Tests ausführen:
